@@ -322,3 +322,51 @@ private (of which the GPU process alone is 57 / 166); `shimmy-optimizer.exe`: 11
   restore points read only (`vssadmin`, needs admin); Installed apps opens Windows' page. "What fills C:" categories are clickable.
 - 28 Rust tests pass. Installer `Shimmy Optimizer_0.3.0_x64-setup.exe`.
 - Not exercised end to end yet: an actual folder or cache delete on the real PC (left for you to try from the installed build).
+
+## Phase 9: fan modes, heat protection, battery watts (planned 2026-10-28)
+
+Goal: choose the fan mode from the Processor tab, have Shimmy turn CPU boost off when the processor runs hot, and show on the
+Battery tab where the power is going and whether the battery is helping the charger while Run from the charger is on.
+
+### What the firmware allows (read-only probe, 2026-10-28)
+
+| ATK device | DSTS answer | Meaning |
+|---|---|---|
+| `0x00110019` VivoBook fan mode | `0x00030000` | Present; low word 0 = Standard. The Fn+F modes (Silent / Standard / Performance). |
+| `0x00120075` ROG performance mode | call failed | Not on this model. |
+| `0x00110024` / `0x00110025` CPU / GPU fan curves | call failed | **No custom fan curves, so no direct RPM control.** |
+| `0x001200A0`, `A3`, `B0`, `B1` power limits (PPT) | call failed | No ASUS CPU power limits. |
+| `0x00110013` CPU fan | `0x00010020` | 3200 RPM, already read. |
+
+Windows' processor settings work on the active plan (Balanced): max processor state 100 % (AC and DC), boost mode on.
+
+### Decisions (from the grilling)
+
+| Question | Decision |
+|---|---|
+| Fan control | Three buttons on the Processor tab: **Silent / Standard / Performance** (the ASUS modes), live CPU fan RPM beside them. |
+| Fn+F or MyASUS changes the mode | **Follow it.** Shimmy reads the firmware and shows the active mode; nothing is re-applied. |
+| How to cool a hot CPU | **Turn CPU boost off** (Windows processor boost mode = disabled, AC and DC) and nothing else. |
+| Trigger | **Automatic, with a switch, on by default.** Boost off after 30 s at **≥ 90 °C**; back on after 2 min at **≤ 75 °C**. |
+| Fan mode Performance | Heat protection still applies. |
+| Telling you | **Quiet:** written to the Log and shown on the Processor tab ("Boost off: cooling down"). No notification. |
+| Battery watts | Battery in/out W; CPU package W; RTX W; estimated total draw; a drain history chart. |
+| RTX watts | **Only when it is already awake** (Windows' GPU engine counters show it in use); otherwise "asleep, about 0 W". Never wakes it. |
+| Total draw | Exact on battery (the discharge rate). On the charger it is an estimate (no charger sensor), labelled as such. |
+| History | **Last hour, in memory**, sampled every 3 s by the sampler (also in the tray), cleared on restart. Drain shaded. |
+| Battery draining while holding | **Warn only:** keep the one notification per plug-in (more than 3 W for 30 s), plus the live state and chart. |
+
+### Step 1: firmware test (reversible)
+1. Write each fan mode through DEVS `0x00110019` and read it back; confirm the value mapping (expected, from G-Helper:
+   0 Standard, 1 Performance, 2 Silent) by fan RPM and CPU power under the same load. Put it back to Standard.
+2. Boost: save `PERFBOOSTMODE` (AC and DC) for the active plan, set 0, confirm the clock stays at or below base under load, restore.
+
+### Step 2: build
+- `asus.rs`: fan mode read and write. `cpu.rs`/Processor page: mode buttons, active mode, RPM.
+- `heat.rs`: pure decision functions (like `hold.rs`), unit-tested: thresholds, timings, hysteresis.
+- Boost off records the original values in `settings.json` and restores them when the heat clears, on Exit, and at start-up if
+  Shimmy was closed while boost was off (crash or reboot), so boost is never left off by accident. If the power plan changes
+  while boost is off, the new plan is left alone.
+- Battery page: power section (in/out, CPU, RTX, total), and a one-hour chart from a 1,200-point ring buffer in `Shared`.
+- Settings: the heat protection switch. Log: `fan-mode`, `boost-off`, `boost-on`.
+- Tests; screenshots; installer rebuilt as v0.4.0.
