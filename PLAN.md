@@ -431,3 +431,42 @@ Same script, run as admin so the sensor reader delivers. Full load on 16 threads
 - Checked in the installed app: the Fan and heat section renders, shows Standard from the firmware and the live fan speed.
   Not yet exercised by hand (Windows blocks automated clicks on an elevated window): switching modes from the page, the
   heat switch, and the Battery page's Power section.
+
+## Phase 10: user reports, split into small releases (planned 2026-10-28)
+
+Reports from users after the public release: Defender flags the download, the RAM offloader breaks some apps, graphics only
+works on NVIDIA, per-core values look wrong, and there is no way to get updates. Done one sub-phase at a time, each ending in
+a release, so each session stays small.
+
+| Sub-phase | What | Release |
+|---|---|---|
+| **10a** | Build fixes against antivirus flags + the safe-marking system for apps | v0.5.0 |
+| 10b | Updates page: check GitHub, what's new, download and install (SHA-256 checked) | v0.5.1 |
+| 10c | Accurate per-core processor values | v0.5.2 |
+| 10d | Graphics for every vendor (AMD, Intel, NVIDIA) | v0.6.0 |
+
+### Research already done (do not redo)
+
+**Antivirus (Haiku sweep).** Defender finds nothing locally, even as a web download; users most likely see SmartScreen or a
+cloud reputation check on a new unsigned file. Signals that add up: unsigned binaries, always elevated, silent PawnIO driver
+install, a logon task with highest privileges via a temp XML and `schtasks`, force-killing windowless processes,
+`EmptyWorkingSet` on every process, hidden `powershell.exe` and `net stop wuauserv`, a hardcoded list of antivirus process
+names (it is a protection list), a sidecar exe with no version info, an installer with no CompanyName. The real fix is code
+signing (SignPath Foundation is free for open source; Azure Trusted Signing about $10 a month) plus a false-positive report at
+microsoft.com/wdsi/filesubmission. Both need the owner.
+
+**RAM offloader (Haiku map).** `quick_clean_impl` (lib.rs) force-kills every "close, risk low" group whose processes have no
+visible window, and it runs unattended from the automatic clean at level "clean". Tray-hidden apps (Discord, Spotify, Steam,
+sync clients, Teams) count as windowless. `trim_all` (system.rs) calls `EmptyWorkingSet` on every process with no protection
+check, so audio, games and capture can stutter. The UI says "apps marked safe", but no such mark exists. Plan:
+- Marks keyed by exe name: **Protected** (never closed, never trimmed), **Safe** (Clean now and the automatic clean may close
+  it), **Default** (suggested only, never closed automatically).
+- The check goes in `classify` (marks passed in), a skip set for `trim_all`, and `quick_clean_impl` closes only Safe apps.
+- A mark control on the Apps page group rows, a list in Settings, and corrected copy.
+
+**Graphics (Haiku).** Vendor-neutral path: `D3DKMTOpenAdapterFromLuid` (LUID from the PDH instance names) +
+`D3DKMTQueryAdapterInfo` with `KMTQAITYPE_ADAPTERPERFDATA` (Temperature in 0.1 °C, FanRPM, Power in 0.1 %, MemoryFrequency)
+and `KMTQAITYPE_NODEPERFDATA` (Frequency, MaxFrequency), then `D3DKMTCloseAdapter`. In windows 0.62 under
+`windows::Wdk::Graphics::Direct3D`, feature `Wdk_Graphics_Direct3D`. Not proven whether a query wakes a sleeping laptop dGPU:
+query a dedicated card only when PDH shows it in use, and only while the page is open. Keep NVML as the richer NVIDIA source.
+Missing fields show as unavailable, never 0. LibreHardwareMonitor has a single GPU switch (enabling it polls NVIDIA too).
