@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Shimmy Optimizer",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "identifier": "com.shimmy.optimizer",
   "build": {
     "frontendDist": "../src",
@@ -50,6 +50,9 @@
         "installerIcon": "icons/icon.ico"
       }
     },
-    "shortDescription": "Keeps this laptop fast, cool and tidy."
+    "shortDescription": "Keeps your Windows PC fast, cool and tidy.",
+    "publisher": "Shimrith Raj",
+    "copyright": "Shimrith Raj",
+    "category": "Utility"
   }
 }

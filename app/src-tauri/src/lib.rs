@@ -165,21 +165,25 @@ impl Shared {
     h.push_back(battery::PowerPoint { t: store::now_ms(), battery_w, cpu_w, plugged: live.plugged, held });
   }
 
-  /// Whether the RTX is awake (Windows' GPU engine counters show it in use) and, only then, its watts from NVML.
-  /// Asking NVML wakes a sleeping RTX, so it is never asked while the card sleeps.
-  fn rtx_power(&self) -> (bool, Option<f64>) {
-    let awake = match self.gpu_counters.lock().unwrap().get_or_insert_with(gpu::Counters::open) {
-      Ok(c) => c.sample(&HashMap::new()).0.iter().any(|a| !a.integrated && a.load_pct >= 1.0),
-      Err(_) => false,
+  /// Whether there is a dedicated graphics card, whether it is awake (Windows' GPU engine counters show it in use) and,
+  /// only then, its watts from NVML. Asking NVML wakes a sleeping card, so it is never asked while the card sleeps.
+  fn rtx_power(&self) -> (bool, bool, Option<f64>) {
+    let (present, awake) = match self.gpu_counters.lock().unwrap().get_or_insert_with(gpu::Counters::open) {
+      Ok(c) => {
+        let adapters = c.sample(&HashMap::new()).0;
+        let dedicated: Vec<_> = adapters.iter().filter(|a| !a.integrated).collect();
+        (!dedicated.is_empty(), dedicated.iter().any(|a| a.load_pct >= 1.0))
+      }
+      Err(_) => (false, false),
     };
     if !awake {
-      return (false, None);
+      return (present, false, None);
     }
     let w = match self.nvml.lock().unwrap().get_or_insert_with(|| nvml_wrapper::Nvml::init().map_err(|e| e.to_string())) {
       Ok(n) => gpu::nvidia(n).ok().and_then(|g| g.power_w),
       Err(_) => None,
     };
-    (true, w)
+    (true, true, w)
   }
 
   /// Puts CPU boost back if Shimmy turned it off. Used when heat protection is switched off, at Exit and at start-up.
@@ -798,12 +802,13 @@ async fn get_battery(s: State<'_, Shr>) -> Result<Value, String> {
       "myasus": hold::myasus_limit(),
       "overridden": s.hold_watch.lock().unwrap().override_warned,
     });
-    let (gpu_awake, gpu_w) = s.rtx_power();
+    let (gpu_present, gpu_awake, gpu_w) = s.rtx_power();
     let cpu_w = rows.as_deref().and_then(|r| sensors::value(r, "Cpu", "Power", "Package"));
     let total = battery::total_draw(view.plugged, view.rate_w, cpu_w, gpu_w.unwrap_or(0.0), *s.rest_w.lock().unwrap());
     let power = json!({
       "batteryW": view.rate_w,
       "cpuW": cpu_w,
+      "gpuPresent": gpu_present,
       "gpuAwake": gpu_awake,
       "gpuW": gpu_w,
       "totalW": total.map(|t| t.0),

@@ -290,9 +290,9 @@ function renderCpu() {
 }
 
 const FAN_MODES = [
-  ['silent', 'Silent', 'Quietest. The firmware also lowers the processor\'s power: about 34 W under full load.'],
-  ['standard', 'Standard', 'The everyday balance: about 38 W under full load.'],
-  ['performance', 'Performance', 'Full power, about 45 W under full load, with the fans at their loudest.'],
+  ['silent', 'Silent', 'Quietest. The firmware also lowers the processor\'s power limit, so it runs cooler and slower.'],
+  ['standard', 'Standard', 'The everyday balance of speed, heat and noise.'],
+  ['performance', 'Performance', 'Full power, with the fans at their loudest.'],
 ];
 
 function renderFan() {
@@ -307,7 +307,7 @@ function renderFan() {
     ? 'Off. Boost stays on whatever the temperature.'
     : heat.boostOff
       ? `Boost is off${since}: cooling down. It comes back after 2 minutes at ${heat.coolC} °C or less.`
-      : `On. If the processor stays at ${heat.hotC} °C or more for 30 seconds, Shimmy turns boost off until it cools to ${heat.coolC} °C. About 8 °C cooler for a small loss of speed.`;
+      : `On. If the processor stays at ${heat.hotC} °C or more for 30 seconds, Shimmy turns boost off until it cools to ${heat.coolC} °C. Usually several degrees cooler for a small loss of speed.`;
   $('#fanCtl').innerHTML = `<div class="hold${heat.boostOff ? ' on' : ''}"><div><b>Heat protection</b><p>${esc(text)}</p></div>${sw('data-heat', heat.enabled, 'Heat protection')}</div>${modes}
     <p class="care-note">Fn+F and MyASUS change the same setting; Shimmy shows whichever mode is active. The fans themselves follow the firmware's curve for the mode, which cannot be changed on this laptop.</p>`;
 }
@@ -786,7 +786,7 @@ function renderPower(p, b, hold) {
   const facts = [
     bat,
     [p.cpuW != null ? `${p.cpuW.toFixed(1)} W` : '–', 'Processor'],
-    p.gpuAwake ? [p.gpuW != null ? `${p.gpuW.toFixed(1)} W` : '–', 'RTX 3050, in use'] : ['Asleep', 'RTX 3050, about 0 W'],
+    !p.gpuPresent ? ['None', 'No dedicated graphics card'] : p.gpuAwake ? [p.gpuW != null ? `${p.gpuW.toFixed(1)} W` : '–', 'Graphics card, in use'] : ['Asleep', 'Graphics card, about 0 W'],
     [p.totalW != null ? `${p.totalExact ? '' : 'about '}${Math.round(p.totalW)} W` : '–', p.totalExact ? 'Whole laptop, measured from the battery' : 'Whole laptop, estimated (no charger sensor)'],
   ];
   $('#powerFacts').innerHTML = facts.map(([v, l]) => `<div><b>${esc(v)}</b><span>${esc(l)}</span></div>`).join('');
@@ -1150,7 +1150,7 @@ function renderSettings() {
       <p class="set-note" id="weeklyLine">${esc(weeklyLine())}</p>`),
     block('Heat protection', `When the processor stays at 90 °C or more for 30 seconds, Shimmy turns CPU boost off until it cools to 75 °C for 2 minutes. Quiet: it shows on the Processor page and in the Log.`, sw('data-set="heat.enabled"', st.heat.enabled, 'Heat protection')),
     block('Start with Windows', 'Starts Shimmy in the tray when you sign in, with administrator rights and no prompt, through a Task Scheduler task. Works on battery too.', sw('data-autostart', startWithWindows, 'Start with Windows')),
-    block('Big and duplicate files', 'Where the finder on the Clean page looks, and what it never offers. Code projects, Salon Shaila folders, hidden files and your Keep list are always left out.', '',
+    block('Big and duplicate files', 'Where the finder on the Clean page looks, and what it never offers. Code projects, protected work folders, hidden files and your Keep list are always left out.', '',
       `<div class="set-grid">${field('Count a file as large from', num('finder.largeMb', f.largeMb, 'MB', 50, 100000))}${field('Old caches: files untouched for', num('caches.ageDays', st.caches.ageDays, 'days', 1, 365))}</div>
       <h4>Folders</h4>
       <div class="rows">
