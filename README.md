@@ -117,5 +117,14 @@ is unsigned, so Windows SmartScreen will warn once.
 
 ---
 
-*Shimmy is a personal project, built for one laptop and shared as-is. Use the ASUS controls at your own risk on other
-models.*
+## Founder
+
+Shimmy Optimizer was founded and is built by **Shimrith Raj**.
+
+## Licence
+
+Shimmy is released under the [MIT licence](LICENSE): free to use, change and share, as long as the copyright notice stays.
+Third-party components keep their own licences. LibreHardwareMonitor is under MPL-2.0 and the PawnIO driver is under GPL-2.0
+with an exception. Details are in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+*Shared as-is, without warranty. Use the ASUS controls at your own risk on models other than the one Shimmy was built on.*

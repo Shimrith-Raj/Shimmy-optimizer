@@ -1150,6 +1150,7 @@ function renderSettings() {
       <p class="set-note" id="weeklyLine">${esc(weeklyLine())}</p>`),
     block('Heat protection', `When the processor stays at 90 °C or more for 30 seconds, Shimmy turns CPU boost off until it cools to 75 °C for 2 minutes. Quiet: it shows on the Processor page and in the Log.`, sw('data-set="heat.enabled"', st.heat.enabled, 'Heat protection')),
     block('Start with Windows', 'Starts Shimmy in the tray when you sign in, with administrator rights and no prompt, through a Task Scheduler task. Works on battery too.', sw('data-autostart', startWithWindows, 'Start with Windows')),
+    block('About', 'Shimmy Optimizer, founded and built by Shimrith Raj. Open source under the MIT licence; the licences of the parts it includes are in the legal folder where Shimmy is installed.'),
     block('Big and duplicate files', 'Where the finder on the Clean page looks, and what it never offers. Code projects, protected work folders, hidden files and your Keep list are always left out.', '',
       `<div class="set-grid">${field('Count a file as large from', num('finder.largeMb', f.largeMb, 'MB', 50, 100000))}${field('Old caches: files untouched for', num('caches.ageDays', st.caches.ageDays, 'days', 1, 365))}</div>
       <h4>Folders</h4>

@@ -2,9 +2,9 @@
 name = "shimmy-optimizer"
 version = "0.4.1"
 description = "Shimmy Optimizer"
-authors = ["Studio RedPix"]
-license = ""
-repository = ""
+authors = ["Shimrith Raj"]
+license = "MIT"
+repository = "https://github.com/Shimrith-Raj/Shimmy-optimizer"
 edition = "2024"
 rust-version = "1.90"
 
