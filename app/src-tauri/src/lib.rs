@@ -457,8 +457,8 @@ fn get_history(s: State<'_, Shr>) -> Value {
 
 /// The Graphics page (and the Processor page's summary): one entry per graphics chip, any vendor. Windows' counters
 /// give per-engine and per-app use; the graphics kernel gives temperature, clocks, fan and power share for every chip
-/// that may be asked (a sleeping dedicated card never is, see gpu::Counters::readouts); NVML adds NVIDIA's detail,
-/// read only while a page asks, as since Phase 2. NVML is not loaded at all when Windows lists no NVIDIA chip.
+/// that may be asked (a sleeping dedicated card never is, see gpu::kernel_readouts); NVML adds NVIDIA's detail, read
+/// only while a page asks and only for a card that is in use. NVML is not loaded at all otherwise.
 #[tauri::command]
 async fn get_gpu(s: State<'_, Shr>) -> Result<Value, String> {
   let s = s.inner().clone();
@@ -471,9 +471,9 @@ async fn get_gpu(s: State<'_, Shr>) -> Result<Value, String> {
       }
       Err(e) => (Vec::new(), Vec::new(), Some(e.clone())),
     };
-    // Without Windows' list, try NVML anyway, as before: it is the only source left.
-    let want_nvml = counters_error.is_some() || adapters.iter().any(|a| a.vendor == "NVIDIA");
-    let (nv, error) = if !want_nvml {
+    // NVML only for an NVIDIA card Windows' counters show in use: asking it wakes a sleeping card. Without Windows' list
+    // nothing is known about the card, so NVML is not asked blindly either.
+    let (nv, error) = if !gpu::nvml_wanted(&adapters) {
       (None, None)
     } else {
       let mut slot = s.nvml.lock().unwrap();
@@ -485,10 +485,13 @@ async fn get_gpu(s: State<'_, Shr>) -> Result<Value, String> {
         Err(e) => (None, Some(e.clone())),
       }
     };
-    match s.gpu_counters.lock().unwrap().as_mut() {
-      Some(Ok(c)) => c.readouts(&mut adapters, nv),
-      _ => gpu::readouts_without_counters(&mut adapters, nv),
+    // The graphics kernel is asked with no lock held (it is slow, and the Battery page needs the counters), then what it
+    // learned about the chips is stored.
+    let learned = gpu::kernel_readouts(&mut adapters);
+    if let Some(Ok(c)) = s.gpu_counters.lock().unwrap().as_mut() {
+      c.learn(&learned);
     }
+    gpu::readouts_without_counters(&mut adapters, nv);
     json!({ "error": error, "adapters": adapters, "apps": apps, "countersError": counters_error })
   })
   .await

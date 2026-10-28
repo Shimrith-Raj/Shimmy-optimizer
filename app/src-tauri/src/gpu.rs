@@ -163,7 +163,7 @@ pub struct Adapter {
   vendor_id: u32,
   /// The engine (node) that Windows names 3D, whose clock is the adapter's clock.
   #[serde(skip)]
-  node_3d: u32,
+  node_3d: Option<u32>,
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -293,6 +293,30 @@ fn may_sleep(integrated: bool, load_pct: f64, has_builtin: bool) -> bool {
   !integrated && has_builtin && load_pct < IN_USE_PCT
 }
 
+/// The built-in chip, for the sleep decision. When unsure, the safe answer is "built in", so the NVIDIA card may sleep and
+/// is not asked: on a PC with an NVIDIA card, any other chip is taken as the built-in one unless the kernel's hybrid bits
+/// say it is the dedicated one. (A hybrid laptop's AMD or Intel chip can report 1 GB or more of its own memory.)
+fn is_builtin(vendor_id: u32, dedicated_bytes: u64, kmt_type: Option<u32>, has_nvidia: bool) -> bool {
+  if is_integrated(vendor_id, dedicated_bytes, kmt_type) {
+    return true;
+  }
+  has_nvidia && vendor_id != NVIDIA && kmt_type.is_none_or(|t| t & HYBRID_DISCRETE == 0)
+}
+
+/// Sets each adapter's `asleep` from its load and whether the PC has a built-in chip.
+fn set_sleep(adapters: &mut [Adapter]) {
+  let has_builtin = adapters.iter().any(|a| a.integrated);
+  for a in adapters {
+    a.asleep = may_sleep(a.integrated, a.load_pct, has_builtin);
+  }
+}
+
+/// Whether NVML may be asked: only when an NVIDIA chip is awake (in use by Windows' counters). Asking NVML wakes a
+/// sleeping card, and with no adapter list at all nothing is known, so it is not asked blindly.
+pub fn nvml_wanted(adapters: &[Adapter]) -> bool {
+  adapters.iter().any(|a| a.vendor_id == NVIDIA && !a.asleep)
+}
+
 fn dxgi_adapters() -> HashMap<String, AdapterInfo> {
   let mut out = HashMap::new();
   let Ok(f) = (unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }) else { return out };
@@ -358,20 +382,33 @@ impl Counters {
     summarise(&read(self.engine), &read(self.dedicated), &read(self.shared), &self.adapters, names)
   }
 
-  /// Fills each adapter's readout and verdict for the Graphics page: the graphics kernel for every adapter that may be
-  /// asked (never a sleeping card, see `may_sleep`), NVML for the NVIDIA card when given.
-  pub fn readouts(&mut self, adapters: &mut Vec<Adapter>, nv: Option<Nvidia>) {
-    for a in adapters.iter_mut() {
-      let kmt = if a.asleep { None } else { kmt::query(&a.luid, a.node_3d) };
-      // Remember the kernel's hybrid bits, so built in or dedicated is right from now on.
-      if let (Some(t), Some(info)) = (kmt.as_ref().and_then(|k| k.adapter_type), self.adapters.get_mut(&a.luid)) {
-        info.kmt_type = Some(t);
-        a.integrated = is_integrated(info.vendor_id, info.dedicated_total, Some(t));
+  /// Remembers the kernel's hybrid bits (LUID, type) that `kernel_readouts` learned, so built in or dedicated is right
+  /// from now on.
+  pub fn learn(&mut self, types: &[(String, u32)]) {
+    for (luid, t) in types {
+      if let Some(info) = self.adapters.get_mut(luid) {
+        info.kmt_type = Some(*t);
       }
-      a.readout = merge(None, kmt.map(|k| k.values).as_ref());
     }
-    readouts_without_counters(adapters, nv);
   }
+}
+
+/// Fills each adapter's readout from the graphics kernel, for every adapter that may be asked (never a sleeping card, see
+/// `may_sleep`). Takes no lock, so callers do it after letting go of `Counters`. Returns the adapter types it learned, for
+/// `Counters::learn`. The sleep verdicts are worked out again with them.
+pub fn kernel_readouts(adapters: &mut [Adapter]) -> Vec<(String, u32)> {
+  let mut learned = Vec::new();
+  let has_nvidia = adapters.iter().any(|a| a.vendor_id == NVIDIA);
+  for a in adapters.iter_mut() {
+    let kmt = if a.asleep { None } else { kmt::query(&a.luid, a.node_3d) };
+    if let Some(t) = kmt.as_ref().and_then(|k| k.adapter_type) {
+      learned.push((a.luid.clone(), t));
+      a.integrated = is_builtin(a.vendor_id, a.dedicated_total_mb << 20, Some(t), has_nvidia);
+    }
+    a.readout = merge(None, kmt.map(|k| k.values).as_ref());
+  }
+  set_sleep(adapters);
+  learned
 }
 
 /// NVML and the verdicts only, no graphics kernel. Also the whole job when Windows' counters are not available.
@@ -420,6 +457,7 @@ fn summarise(engines: &[(String, f64)], dedicated: &[(String, f64)], shared: &[(
   let mut luids: Vec<String> = per_engine.keys().map(|k| k.0.clone()).chain(info.keys().cloned()).collect();
   luids.sort();
   luids.dedup();
+  let has_nvidia = info.values().any(|a| a.vendor_id == NVIDIA);
   let mut adapters: Vec<Adapter> = luids
     .into_iter()
     .filter(|l| info.contains_key(l))
@@ -447,7 +485,7 @@ fn summarise(engines: &[(String, f64)], dedicated: &[(String, f64)], shared: &[(
         name: a.name.replace("(TM)", "").replace("(R)", ""),
         short: short_name(&a.name),
         vendor: vendor_name(a.vendor_id).into(),
-        integrated: is_integrated(a.vendor_id, a.dedicated_total, a.kmt_type),
+        integrated: is_builtin(a.vendor_id, a.dedicated_total, a.kmt_type, has_nvidia),
         asleep: false,
         dedicated_total_mb: a.dedicated_total / 1_048_576,
         dedicated_mb: ded.get(&l).copied().unwrap_or(0),
@@ -457,15 +495,12 @@ fn summarise(engines: &[(String, f64)], dedicated: &[(String, f64)], shared: &[(
         nvidia: None,
         status: Status::default(),
         vendor_id: a.vendor_id,
-        node_3d: node_3d.unwrap_or(0),
+        node_3d,
         luid: l,
       }
     })
     .collect();
-  let has_builtin = adapters.iter().any(|a| a.integrated);
-  for a in &mut adapters {
-    a.asleep = may_sleep(a.integrated, a.load_pct, has_builtin);
-  }
+  set_sleep(&mut adapters);
   // Discrete GPU first.
   adapters.sort_by_key(|a| a.integrated);
 
@@ -540,6 +575,11 @@ fn clean(p: Option<RawPerf>, n: Option<RawNode>) -> Kmt {
   }
 }
 
+/// The 3D node's clock, asked only when Windows named a 3D engine: node 0 is not assumed to be it.
+fn node_clock(node: Option<u32>, ask: impl FnOnce(u32) -> Option<RawNode>) -> Option<RawNode> {
+  node.and_then(ask)
+}
+
 /// What the Graphics page shows for one adapter, whichever source answered.
 #[derive(Serialize, Debug, Default, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -601,12 +641,16 @@ fn attach_nvidia(adapters: &mut Vec<Adapter>, nv: Nvidia) {
         nvidia: None,
         status: Status::default(),
         vendor_id: NVIDIA,
-        node_3d: 0,
+        node_3d: None,
       },
     );
     0
   });
   let a = &mut adapters[i];
+  // A sleeping card's NVML answer is ignored, so "Asleep" stays true (the caller does not ask it, this is the backstop).
+  if a.asleep {
+    return;
+  }
   let k = a.readout.as_ref().map(|r| Kmt {
     temp_c: r.temp_c,
     fan_rpm: r.fan_rpm,
@@ -620,14 +664,14 @@ fn attach_nvidia(adapters: &mut Vec<Adapter>, nv: Nvidia) {
   a.nvidia = Some(nv);
 }
 
-/// The verdict for one adapter: NVML's when it answered, else from the merged readout and Windows' load.
+/// The verdict for one adapter: "Asleep" for a sleeping card whatever NVML said, else NVML's when it answered, else from the merged readout and Windows' load.
 fn adapter_status(a: &Adapter) -> Status {
-  if let Some(nv) = &a.nvidia {
-    return status(nv);
-  }
   let s = |level, text: String| Status { level, text };
   if a.asleep {
     return s("good", "Asleep. Shimmy asks it nothing until an app uses it, so it stays asleep and saves power.".into());
+  }
+  if let Some(nv) = &a.nvidia {
+    return status(nv);
   }
   if let Some(t) = a.readout.as_ref().and_then(|r| r.temp_c) {
     let t = t.round();
@@ -677,7 +721,7 @@ mod kmt {
   }
 
   /// None when the adapter cannot be opened (gone, or no such LUID). Fields the driver refuses stay None.
-  pub(super) fn query(luid: &str, node: u32) -> Option<Answer> {
+  pub(super) fn query(luid: &str, node: Option<u32>) -> Option<Answer> {
     let (high, low) = luid_parts(luid)?;
     let mut open = D3DKMT_OPENADAPTERFROMLUID { AdapterLuid: LUID { LowPart: low, HighPart: high }, hAdapter: 0 };
     if unsafe { D3DKMTOpenAdapterFromLuid(&mut open) }.is_err() {
@@ -686,11 +730,11 @@ mod kmt {
     let h = Handle(open.hAdapter);
 
     let mut kind = D3DKMT_ADAPTERTYPE::default();
-    let adapter_type = ask(&h, KMTQAITYPE_ADAPTERTYPE, &mut kind).then_some(unsafe { kind.Anonymous.Value });
+    let adapter_type = ask(&h, KMTQAITYPE_ADAPTERTYPE, &mut kind).then(|| unsafe { kind.Anonymous.Value });
 
     // Input: physical adapter 0 (laptops have one per LUID). Zeroed by Default.
     let mut perf = D3DKMT_ADAPTER_PERFDATA::default();
-    let perf = ask(&h, KMTQAITYPE_ADAPTERPERFDATA, &mut perf).then_some(RawPerf {
+    let perf = ask(&h, KMTQAITYPE_ADAPTERPERFDATA, &mut perf).then(|| RawPerf {
       temperature: perf.Temperature,
       fan_rpm: perf.FanRPM,
       power: perf.Power,
@@ -698,9 +742,11 @@ mod kmt {
       max_mem_hz: perf.MaxMemoryFrequency,
     });
 
-    // Input: the 3D engine's node ordinal, physical adapter 0.
-    let mut np = D3DKMT_NODE_PERFDATA { NodeOrdinal: node, ..Default::default() };
-    let n = ask(&h, KMTQAITYPE_NODEPERFDATA, &mut np).then_some(RawNode { hz: np.Frequency, max_hz: np.MaxFrequency });
+    // Input: the 3D engine's node ordinal, physical adapter 0. Not asked when Windows named no 3D engine.
+    let n = node_clock(node, |ordinal| {
+      let mut np = D3DKMT_NODE_PERFDATA { NodeOrdinal: ordinal, ..Default::default() };
+      ask(&h, KMTQAITYPE_NODEPERFDATA, &mut np).then(|| RawNode { hz: np.Frequency, max_hz: np.MaxFrequency })
+    });
 
     Some(Answer { adapter_type, values: clean(perf, n) })
   }
@@ -758,7 +804,7 @@ mod tests {
     // The RTX is in use, so it may be asked; its clock is read from the engine Windows calls 3D.
     assert!(!adapters[0].asleep);
     assert_eq!((adapters[0].vendor.as_str(), adapters[1].vendor.as_str()), ("NVIDIA", "AMD"));
-    assert_eq!(adapters[0].node_3d, 0);
+    assert_eq!(adapters[0].node_3d, Some(0));
 
     // An idle RTX next to a built-in chip is asleep, so nothing is asked of it.
     let idle = vec![e(12, "BBBB", 0, "3D", 8.0), e(12, "AAAA", 0, "3D", 0.2)];
@@ -797,6 +843,89 @@ mod tests {
     assert!(!may_sleep(false, 0.4, false));
     assert!(!may_sleep(false, 12.0, true));
     assert!(!may_sleep(true, 0.0, true));
+  }
+
+  /// A hybrid laptop: the RTX plus an AMD or Intel chip, idle or busy.
+  fn hybrid(builtin_vendor: u32, builtin_bytes: u64, kmt_type: Option<u32>, rtx_busy: bool) -> Vec<Adapter> {
+    let info = HashMap::from([
+      ("000000000000AAAA".to_string(), AdapterInfo { name: "NVIDIA GeForce RTX 3050 Laptop GPU".into(), vendor_id: NVIDIA, dedicated_total: 4 << 30, kmt_type: None }),
+      ("000000000000BBBB".to_string(), AdapterInfo { name: "Built-in chip".into(), vendor_id: builtin_vendor, dedicated_total: builtin_bytes, kmt_type }),
+    ]);
+    let e = |l: &str, v: f64| (format!("pid_1_luid_0x00000000_0x0000{l}_phys_0_eng_0_engtype_3D"), v);
+    let engines = vec![e("BBBB", 8.0), e("AAAA", if rtx_busy { 30.0 } else { 0.0 })];
+    summarise(&engines, &[], &[], &info, &HashMap::new()).0
+  }
+
+  #[test]
+  fn sleep_on_a_hybrid_laptop_with_a_big_builtin_carve_out() {
+    // The AMD or Intel chip reports 2 GB, so by memory alone it looks dedicated. Next to an NVIDIA card it is still the
+    // built-in one, so the idle RTX sleeps and the Battery page's pick of dedicated card is the RTX.
+    for (vendor, kmt) in [(AMD, None), (INTEL, None), (AMD, Some(HYBRID_INTEGRATED))] {
+      let a = hybrid(vendor, 2 << 30, kmt, false);
+      let rtx = a.iter().find(|x| x.vendor_id == NVIDIA).unwrap();
+      let chip = a.iter().find(|x| x.vendor_id == vendor).unwrap();
+      assert!(chip.integrated && !chip.asleep, "{vendor:#x} {kmt:?}");
+      assert!(!rtx.integrated && rtx.asleep, "{vendor:#x} {kmt:?}");
+    }
+    // In use, the RTX is awake.
+    assert!(!hybrid(AMD, 2 << 30, None, true).iter().any(|x| x.asleep));
+    // The kernel saying the chip is the discrete one wins.
+    assert!(!is_builtin(AMD, 2 << 30, Some(HYBRID_DISCRETE), true));
+    // No NVIDIA card: memory decides as before.
+    assert!(!is_builtin(AMD, 2 << 30, None, false));
+    assert!(is_builtin(AMD, 512 << 20, None, false));
+  }
+
+  #[test]
+  fn nvml_only_for_an_awake_nvidia_card() {
+    // Asleep: not asked.
+    assert!(!nvml_wanted(&hybrid(AMD, 2 << 30, None, false)));
+    // Awake: asked.
+    assert!(nvml_wanted(&hybrid(AMD, 512 << 20, None, true)));
+    // No NVIDIA chip, or no list at all (Windows' counters failed): never asked blindly.
+    let info = HashMap::from([("000000000000BBBB".to_string(), AdapterInfo { name: "Intel(R) Iris(R) Xe Graphics".into(), vendor_id: INTEL, dedicated_total: 128 << 20, kmt_type: None })]);
+    assert!(!nvml_wanted(&summarise(&[], &[], &[], &info, &HashMap::new()).0));
+    assert!(!nvml_wanted(&[]));
+    // A lone NVIDIA card runs the screen, so it is awake and asked.
+    let lone = HashMap::from([("000000000000AAAA".to_string(), AdapterInfo { name: "NVIDIA GeForce RTX 3050".into(), vendor_id: NVIDIA, dedicated_total: 4 << 30, kmt_type: None })]);
+    assert!(nvml_wanted(&summarise(&[], &[], &[], &lone, &HashMap::new()).0));
+  }
+
+  #[test]
+  fn a_sleeping_card_ignores_nvml() {
+    let mut a = hybrid(AMD, 2 << 30, None, false);
+    let nv = Nvidia { name: "NVIDIA GeForce RTX 3050 Laptop GPU".into(), temp_c: Some(46), load_pct: Some(0), ..Default::default() };
+    readouts_without_counters(&mut a, Some(nv.clone()));
+    let rtx = a.iter().find(|x| x.vendor_id == NVIDIA).unwrap();
+    assert!(rtx.asleep && rtx.nvidia.is_none() && rtx.readout.is_none());
+    assert!(rtx.status.text.starts_with("Asleep"));
+    // Even a stray NVML answer on a sleeping card does not change its verdict.
+    let mut stray = rtx.clone();
+    stray.nvidia = Some(nv.clone());
+    assert!(adapter_status(&stray).text.starts_with("Asleep"));
+    // Awake, NVML is attached.
+    let mut b = hybrid(AMD, 2 << 30, None, true);
+    readouts_without_counters(&mut b, Some(nv));
+    assert!(b.iter().find(|x| x.vendor_id == NVIDIA).unwrap().nvidia.is_some());
+  }
+
+  #[test]
+  fn no_3d_engine_means_no_clock() {
+    // Only Copy runs on the RTX: Windows named no 3D engine, so node 0 is not assumed to be it.
+    let info = HashMap::from([("000000000000AAAA".to_string(), AdapterInfo { name: "NVIDIA GeForce RTX 3050".into(), vendor_id: NVIDIA, dedicated_total: 4 << 30, kmt_type: None })]);
+    let copy = vec![("pid_1_luid_0x00000000_0x0000AAAA_phys_0_eng_2_engtype_Copy".to_string(), 5.0)];
+    let a = summarise(&copy, &[], &[], &info, &HashMap::new()).0;
+    assert_eq!(a[0].node_3d, None);
+    let mut asked = false;
+    let n = node_clock(a[0].node_3d, |_| {
+      asked = true;
+      Some(RawNode { hz: 400_000_000, max_hz: 2_100_000_000 })
+    });
+    assert!(!asked && n.is_none());
+    assert_eq!(clean(None, n).clock_mhz, None);
+    // With a 3D engine the node is asked for.
+    let n = node_clock(Some(3), |o| (o == 3).then_some(RawNode { hz: 400_000_000, max_hz: 2_100_000_000 }));
+    assert_eq!(clean(None, n).clock_mhz, Some(400));
   }
 
   #[test]
@@ -840,7 +969,9 @@ mod tests {
       ("000000000000AAAA".to_string(), AdapterInfo { name: "NVIDIA GeForce RTX 3050 Laptop GPU".into(), vendor_id: NVIDIA, dedicated_total: 4 << 30, kmt_type: None }),
       ("000000000000BBBB".to_string(), AdapterInfo { name: "AMD Radeon(TM) Graphics".into(), vendor_id: AMD, dedicated_total: 512 << 20, kmt_type: None }),
     ]);
-    let (mut adapters, _) = summarise(&[], &[], &[], &info, &HashMap::new());
+    // The RTX is in use (an asleep card takes no NVML answer).
+    let busy = vec![("pid_1_luid_0x00000000_0x0000AAAA_phys_0_eng_0_engtype_3D".to_string(), 20.0)];
+    let (mut adapters, _) = summarise(&busy, &[], &[], &info, &HashMap::new());
     let nv = Nvidia { name: "NVIDIA GeForce RTX 3050 Laptop GPU".into(), temp_c: Some(46), pstate: Some(8), load_pct: Some(0), ..Default::default() };
     attach_nvidia(&mut adapters, nv.clone());
     assert_eq!(adapters.len(), 2);
