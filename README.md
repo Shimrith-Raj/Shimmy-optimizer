@@ -127,4 +127,6 @@ Shimmy is released under the [MIT licence](LICENSE): free to use, change and sha
 Third-party components keep their own licences. LibreHardwareMonitor is under MPL-2.0 and the PawnIO driver is under GPL-2.0
 with an exception. Details are in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
+By installing Shimmy you agree to its [Terms of Use](TERMS.md). The installer shows them before anything is installed.
+
 *Shared as-is, without warranty. Use the ASUS controls at your own risk on models other than the one Shimmy was built on.*

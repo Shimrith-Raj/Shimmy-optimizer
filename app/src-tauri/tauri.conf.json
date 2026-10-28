@@ -43,7 +43,8 @@
       "resources/sensors/*": "sensors/",
       "resources/pawnio/*": "pawnio/",
       "../../LICENSE": "legal/LICENSE.txt",
-      "../../THIRD-PARTY-NOTICES.md": "legal/THIRD-PARTY-NOTICES.md"
+      "../../THIRD-PARTY-NOTICES.md": "legal/THIRD-PARTY-NOTICES.md",
+      "../../TERMS.md": "legal/TERMS.txt"
     },
     "windows": {
       "nsis": {
@@ -55,6 +56,7 @@
     "shortDescription": "Keeps your Windows PC fast, cool and tidy.",
     "publisher": "Shimrith Raj",
     "license": "MIT",
+    "licenseFile": "../../TERMS.md",
     "copyright": "Shimrith Raj",
     "category": "Utility"
   }
