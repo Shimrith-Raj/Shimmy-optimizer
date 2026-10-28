@@ -98,6 +98,22 @@ fn real_gpu_counters() {
   assert!(!adapters.is_empty());
 }
 
+/// The graphics kernel's readout (temperature, clocks, fan, power share) for every adapter, any vendor. Read only, and
+/// like the Graphics page it skips a dedicated card that Windows shows idle, so the RTX may stay asleep.
+#[test]
+#[ignore]
+fn real_d3dkmt() {
+  let mut c = shimmy_lib::gpu::Counters::open().expect("counters");
+  let report = shimmy_lib::gpu::kmt_report(&mut c);
+  for (name, asleep, kind, values) in &report {
+    println!("{name}: asleep {asleep}, adapter type {:?}", kind.map(|k| format!("{k:#x}")));
+    println!("  {values:?}");
+  }
+  assert!(!report.is_empty());
+  // A built-in chip can always be asked, so at least one adapter must answer.
+  assert!(report.iter().any(|r| r.3.is_some()), "no adapter answered the graphics kernel");
+}
+
 #[test]
 #[ignore]
 fn real_nvidia() {

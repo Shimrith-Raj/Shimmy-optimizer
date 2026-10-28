@@ -144,13 +144,12 @@
     <p class="sensor-note" id="gpuNote" hidden></p>
 
     <div class="cores-block reveal">
-      <div class="block-head"><h2 id="gpuName">Engines</h2><span class="muted">How busy each part of the graphics card is</span></div>
-      <div id="gpuEngines" class="cores engines"></div>
+      <div id="gpuCards"></div>
     </div>
 
     <div class="chart-block reveal">
       <div class="block-head">
-        <h2>Temperature and load</h2>
+        <h2 id="gpuChartName">Temperature and load</h2>
         <div class="chips" id="gpuRange">
           <button data-gr="300000" class="on">5 min</button>
           <button data-gr="900000">15 min</button>
@@ -162,18 +161,8 @@
     </div>
 
     <div class="recs-block reveal">
-      <div class="block-head"><h2>What is using graphics</h2><span class="muted">Each app's busiest engine, on either graphics chip</span></div>
+      <div class="block-head"><h2>What is using graphics</h2><span class="muted">Each app's busiest engine, on any graphics chip</span></div>
       <div id="gpuApps" class="recs"></div>
-    </div>
-
-    <div class="recs-block reveal">
-      <div class="block-head"><h2>Both graphics chips</h2><span class="muted">Windows uses the built-in chip for everyday work and wakes the dedicated card for games and heavy apps</span></div>
-      <div id="adapters" class="gpu adapters"></div>
-    </div>
-
-    <div class="recs-block reveal">
-      <div class="block-head"><h2>Details</h2></div>
-      <div id="gpuDetails" class="facts four"></div>
     </div>
   </section>
 
