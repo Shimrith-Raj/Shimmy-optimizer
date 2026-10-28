@@ -8,7 +8,7 @@ A Windows 11 system tool for one laptop (ASUS Vivobook M3500QC: Ryzen 7 5800HS, 
 Built with **Tauri 2** (Rust core, vanilla HTML/CSS/JS UI). It **always runs as Administrator** and lives in the tray.
 
 ## Pages
-Home (four readouts and Clean now) · Memory · Processor · Graphics · Storage · Clean · Battery · Apps · Startup · Log · Settings.
+Home (four readouts and Clean now) · Memory · Processor · Graphics · Storage · Clean · Battery · Apps · Startup · Log · Settings · Updates.
 
 ## Layout
 | Path | Purpose |
@@ -17,10 +17,11 @@ Home (four readouts and Clean now) · Memory · Processor · Graphics · Storage
 | `app/src-tauri/src/lib.rs` | Commands, shared state, tray, sampler (every 3 s), automation, settings |
 | `procs.rs` | v0.2's `classify()` and `recommend()` rules, ported 1:1 and parity-tested |
 | `system.rs` | Win32: processes, window titles, close, trim, memory, battery |
-| `cpu.rs`, `sensors.rs` | Processor page; the LibreHardwareMonitor sidecar (`resources/sensors/shimmy-sensors.cs`, compiled by `build.rs` with Windows' own csc.exe) |
+| `cpu.rs`, `sensors.rs` | Processor page (cores from `GetLogicalProcessorInformationEx`, effective clocks from Windows' processor counters); the LibreHardwareMonitor sidecar (`resources/sensors/shimmy-sensors.cs`, compiled by `build.rs` with Windows' own csc.exe) |
 | `caches.rs` | Old caches on the Storage page (age filter, Recycle Bin, skipped while the app runs) |
 | `gpu.rs` | Graphics page: NVML (RTX, only while a page asks) and Windows' GPU Engine counters (every adapter, per app) |
 | `storage.rs`, `clean.rs`, `finder.rs`, `jobs.rs` | Storage page, safe clean and DISM, big and duplicate finder with its deletion gate, background jobs |
+| `update.rs` | Updates page: reads GitHub's latest release, downloads `Shimmy-Optimizer-Setup.exe` to `%TEMP%`, checks its SHA-256, starts it. The only network use in Shimmy, all in Rust |
 | `hold.rs` | Run from the charger: hold level, plug-in re-hold, override and drain warnings |
 | `battery.rs`, `asus.rs` | Battery page; ASUS ATK (`\\.\ATKACPI`) for fans and the charge limit |
 | `auto.rs` | Alerts, automatic memory clean, weekly clean: pure decision functions, unit-tested |
@@ -30,6 +31,8 @@ Home (four readouts and Clean now) · Memory · Processor · Graphics · Storage
 | `design/icon.svg` | Icon master (lime ring and sparkle on a near-black tile); `tauri icon` makes the set |
 | `tools/shoot.ps1` | Launches a build and screenshots it, with clicks and mouse-wheel scrolling |
 | `spike/` | Phase 0 experiments, kept for reference |
+
+Processor use is refreshed only by the 3 s sampler (`Shared.cpu_live`); everything else reads that.
 
 Data lives in `%APPDATA%\com.shimmy.optimizer\`: `settings.json`, `history.json`, `cpu-history.json`, `actions-log.csv`.
 
@@ -41,7 +44,7 @@ Data lives in `%APPDATA%\com.shimmy.optimizer\`: `settings.json`, `history.json`
   `releases/latest/download/Shimmy-Optimizer-Setup.exe`, so any other name breaks them.
 - **Dev build:** `SHIMMY_NO_ADMIN=1 CARGO_TARGET_DIR=src-tauri/target-dev npx tauri build --no-bundle --config '{"identifier":"com.shimmy.optimizer.dev"}'`.
   It has no admin manifest and its own data folder, so it runs beside the real Shimmy. It has no CPU temperature, and Start with Windows is refused.
-- **Tests:** in `app/src-tauri`, `SHIMMY_NO_ADMIN=1 CARGO_TARGET_DIR=target-dev cargo test` (33 tests). Real-PC checks: add `--test real_scan -- --ignored`. They read only, except `set_limit`, which
+- **Tests:** in `app/src-tauri`, `SHIMMY_NO_ADMIN=1 CARGO_TARGET_DIR=target-dev cargo test` (48 tests). Real-PC checks: add `--test real_scan -- --ignored`. They read only, except `set_limit`, which
   writes the charge limit and runs only when `SHIMMY_LIMIT` is set.
 - The frontend is embedded in the exe, so UI changes need a rebuild. An elevated Shimmy that is running locks its exe: quit it from the tray first.
 

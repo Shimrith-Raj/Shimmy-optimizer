@@ -440,9 +440,9 @@ a release, so each session stays small.
 
 | Sub-phase | What | Release |
 |---|---|---|
-| **10a** | Build fixes against antivirus flags + the safe-marking system for apps | v0.5.0 |
-| 10b | Updates page: check GitHub, what's new, download and install (SHA-256 checked) | v0.5.1 |
-| 10c | Accurate per-core processor values | v0.5.2 |
+| 10b | Updates page: check GitHub, what's new, download and install (SHA-256 checked) | **v0.5.0** (built with 10c) |
+| 10c | Accurate per-core processor values | **v0.5.0** (built with 10b) |
+| **10a** | Build fixes against antivirus flags + the safe-marking system for apps | v0.5.1 (moved later: not started) |
 | 10d | Graphics for every vendor (AMD, Intel, NVIDIA) | v0.6.0 |
 
 ### Research already done (do not redo)
@@ -484,3 +484,62 @@ Missing fields show as unavailable, never 0. LibreHardwareMonitor has a single G
    mapping, with base clock per efficiency class.
 Also: drop per-core watts (`Core #N (SMU)` is 0.03–0.18 W, too coarse); keep package power. Update the cpu.rs test that
 asserts 1373 MHz.
+
+### Built (2026-10-28, v0.5.0)
+10b and 10c shipped together as v0.5.0; 10a moves to v0.5.1.
+
+**10c: per-core values** (`cpu.rs`, `lib.rs`, `system.rs`)
+- **Clock:** a logical processor's effective clock is `% Processor Performance` x `Processor Frequency` / 100 from the PDH
+  counters `\Processor Information(*)` (vendor-neutral; "_Total" and "N,_Total" are skipped). A core shows its fastest
+  thread (the siblings share one clock and an idle sibling reads low). The sidecar's `Core #N (Effective)` is the fallback
+  per core when the counters give nothing, so a non-admin dev build still works. The headline is the average of the
+  effective clocks. The fixture test now expects 51.5 MHz for core 1 (and 50.625 MHz on average), not 1373.
+- **Busy %:** only the 3 s sampler refreshes processor use. It owns its own sysinfo `System` for that, and writes per-thread
+  and total use plus the clocks into `Shared.cpu_live`; `get_state`, Home and `get_battery` read it (`system::home` takes the
+  value, `get_battery` uses `battery_now`). `Shared.sys` still refreshes processes (process refresh does not touch the CPU
+  query in sysinfo 0.38) and gets `refresh_cpu_all` only to have a processor list. The 9 s history sample now reads the
+  cached total. Deviation: the history sample is still every 9 s, but usage is sampled every 3 s.
+- **Pairing:** `GetLogicalProcessorInformationEx(RelationProcessorCore)` once at start gives each core's group masks, SMT flag
+  and EfficiencyClass; logical processors map to sysinfo's flat order and to the counters' "group,index" names. Where the
+  classes differ the tile says P-core or E-core (highest class is P); a uniform CPU shows nothing extra. Base clock per class is
+  the largest nominal frequency the counters report for its threads, else the registry's. The rated clock shown is the
+  fastest class's; the throttling check compares with the average over all cores. If the call fails, each logical
+  processor is shown as its own tile.
+- **Power:** per-core watts removed from the tiles; package power stays.
+
+**10b: Updates** (`update.rs`, `auto.rs`, `lib.rs`, UI)
+- `ureq` 3 (default rustls) and `sha2` 0.10. Everything is in Rust with timeouts (10 s connect, 20 s for the response,
+  30 s in all for a check, 20 min for the download); the CSP is unchanged.
+- Check: `releases/latest` (stable only), tag to version, a small numeric compare (a tag with a suffix such as `-beta` is not
+  compared). The installer asset must be named `Shimmy-Optimizer-Setup.exe` and its URL must start with this repository's
+  release-download path. Its SHA-256 is the API's `digest`, else the first hex token of `Shimmy-Optimizer-Setup.exe.sha256`;
+  with neither, the page says why and Download is not offered.
+- Download: a background job (`jobs.rs`) to `%TEMP%\Shimmy-Optimizer-Setup-<version>.exe.part`, with byte progress from two
+  counters in the shared state. The file is hashed from disk; a match renames it to the real name, a mismatch, a short or
+  oversized download deletes it. The URL and hash come from the last check kept in Rust, never from the page.
+- Install: confirms, hashes the file again, then starts it (normal window, not silent; first with
+  `CREATE_BREAKAWAY_FROM_JOB`, then without if Windows refuses) and exits through the tray's Exit path (`exit_app`: boost
+  restored, history saved). Refused in a development build. Logged as `update-download` (also on failure) and `update-install`.
+- Daily check: `updates.autoCheck` (default on) in settings; `lastCheck`, `latestSeen` and `lastNotified` are kept by Shimmy.
+  The sampler starts a check on its own thread when none ran in 24 h (a failed one retries in an hour), shows one notification
+  per new version, and the rail's Updates item shows a small marker while the newest version seen is newer than this one.
+  Not logged as an action. The Settings page has the switch.
+- Updates page: this version, newest version, last checked, Check now, the result (up to date, or the version with its date and
+  notes), Download with progress, Install. Release notes are turned into paragraphs and bullets with `textContent` only.
+  Errors in plain words: offline, timeout, GitHub rate limit, no release, no installer, no checksum, checksum mismatch.
+- README's "Built to be trusted" no longer says "No network": it says the only network use is reading GitHub's public release
+  info and downloading the installer, the daily check can be turned off, and nothing is uploaded.
+- Version 0.5.0 in `Cargo.toml`, `Cargo.lock` and `tauri.conf.json`. `build.rs` skips the sensor sidecar when the build host
+  is not Windows, so the code can be compile-checked elsewhere.
+- Rust tests: 48 (CONTEXT.md said 33, which was one short of the real 34 before this). New: version compare, checksum parsing,
+  release parsing (digest, `.sha256` asset, refusals), SHA-256 of known bytes, error wording, the daily-check rules and the
+  settings clamp; the effective clock from the fixture, counters beating the sidecar, hybrid and multi-group pairing.
+
+**Not verified.** There was no Windows machine: nothing was run, only `cargo check --target x86_64-pc-windows-msvc --all-targets`
+(clean) and the pure-logic tests, which were run on Linux with the Windows-only parts left out. Still to test on the laptop:
+the counters' `% Processor Performance` on this Ryzen at idle, under load and on battery (and that "Core" tiles now read
+low at idle); the topology call (8 cores, 2 threads each); idle Home and Processor load figures no longer jumping; a real
+GitHub release with and without a digest; the download, the hash check and a deliberate mismatch; the installer starting
+from the elevated, Task Scheduler-started Shimmy (the breakaway flag) and Shimmy exiting cleanly; the notification and the
+rail marker; the Updates page layout. A hybrid Intel CPU was only tested as fixture data. The checksum guards against a
+damaged or swapped download, not a compromised release, since the hash comes from the same GitHub release.
