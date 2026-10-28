@@ -1,0 +1,55 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Shimmy Optimizer",
+  "version": "0.3.1",
+  "identifier": "com.shimmy.optimizer",
+  "build": {
+    "frontendDist": "../src",
+    "devUrl": "http://localhost:1431"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Shimmy Optimizer",
+        "width": 1240,
+        "height": 820,
+        "minWidth": 900,
+        "minHeight": 600,
+        "center": true,
+        "visible": false,
+        "theme": "Dark",
+        "backgroundColor": "#0a0b0d",
+        "create": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost"
+    },
+    "withGlobalTauri": true
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "resources/sensors/*": "sensors/",
+      "resources/pawnio/*": "pawnio/"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "perMachine",
+        "installerHooks": "installer-hooks.nsh",
+        "installerIcon": "icons/icon.ico"
+      }
+    },
+    "shortDescription": "Keeps this laptop fast, cool and tidy."
+  }
+}

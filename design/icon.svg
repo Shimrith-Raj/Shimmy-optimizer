@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Shimmy Optimizer: near-black tile, thick lime ring (open at top right), four-point sparkle in the gap -->
+  <rect width="1024" height="1024" rx="224" fill="#0a0b0d"/>
+  <path d="M801.8 434.4 A300 300 0 1 1 589.6 222.2" fill="none" stroke="#c6f432" stroke-width="128"/>
+  <path d="M724 200 Q730 294 824 300 Q730 306 724 400 Q718 306 624 300 Q718 294 724 200 Z" fill="#c6f432"/>
+</svg>

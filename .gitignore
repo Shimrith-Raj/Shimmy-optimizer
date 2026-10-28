@@ -1,0 +1,11 @@
+# Dependencies and build output
+node_modules/
+target/
+target-*/
+dist/
+/app/src-tauri/src-tauri/
+/app/src-tauri/gen/schemas
+# Compiled at build time from shimmy-sensors.cs by build.rs
+/app/src-tauri/resources/sensors/shimmy-sensors.exe
+# Phase 0 spike: vendored binaries (same libraries as app/src-tauri/resources)
+/spike/vendor/

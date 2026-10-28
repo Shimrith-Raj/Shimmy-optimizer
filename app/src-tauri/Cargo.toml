@@ -1,0 +1,33 @@
+[package]
+name = "shimmy-optimizer"
+version = "0.3.1"
+description = "Shimmy Optimizer"
+authors = ["Studio RedPix"]
+license = ""
+repository = ""
+edition = "2024"
+rust-version = "1.90"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "shimmy_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.4", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+tauri = { version = "2.12.5", features = ["tray-icon", "image-png"] }
+regex = "1.13.1"
+winreg = "0.56.0"
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_System_Power", "Win32_Storage_FileSystem", "Win32_UI_WindowsAndMessaging", "Win32_System_RemoteDesktop", "Win32_System_IO", "Win32_System_JobObjects", "Win32_UI_Shell", "Win32_System_Performance", "Win32_System_Memory", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common"] }
+sysinfo = "0.38"
+tauri-plugin-single-instance = "2.5.4"
+tauri-plugin-notification = "2.7.0"
+nvml-wrapper = "0.13.0"
+blake3 = "1.8.7"
+trash = "5.2.9"
+rayon = "1.12.0"

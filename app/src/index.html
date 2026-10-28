@@ -1,0 +1,293 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shimmy Optimizer</title>
+<link rel="stylesheet" href="style.css">
+<script src="boot.js"></script>
+</head>
+<body data-level="good">
+<aside class="rail">
+  <div class="brand">
+    <svg viewBox="0 0 1024 1024" aria-hidden="true"><path d="M801.8 434.4 A300 300 0 1 1 589.6 222.2" fill="none" stroke="currentColor" stroke-width="128"/><path d="M724 200 Q730 294 824 300 Q730 306 724 400 Q718 306 624 300 Q718 294 724 200 Z" fill="currentColor"/></svg>
+    <span>Shimmy</span>
+  </div>
+  <nav id="tabs">
+    <button data-tab="home" class="on"><svg viewBox="0 0 24 24"><path d="M3 11 12 4l9 7v9h-6v-6H9v6H3z"/></svg>Home</button>
+    <button data-tab="memory"><svg viewBox="0 0 24 24"><path d="M4 7h16v10H4zM8 7v10M12 7v10M16 7v10M6 17v3M18 17v3"/></svg>Memory</button>
+    <button data-tab="cpu"><svg viewBox="0 0 24 24"><path d="M7 7h10v10H7zM10 10h4v4h-4zM10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4"/></svg>Processor</button>
+    <button data-tab="gpu"><svg viewBox="0 0 24 24"><path d="M3 7h18v10H3zM7 17v3M12 17v3M17 17v3M7 10h4v4H7zM14 10h3M14 14h3"/></svg>Graphics</button>
+    <button data-tab="storage"><svg viewBox="0 0 24 24"><path d="M3 6h18v12H3zM3 12h18M7 9h.01M7 15h.01"/></svg>Storage</button>
+    <button data-tab="clean"><svg viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z"/></svg>Clean</button>
+    <button data-tab="battery"><svg viewBox="0 0 24 24"><path d="M3 8h15v8H3zM21 11v2M6 11v2M9 11v2"/></svg>Battery</button>
+    <button data-tab="apps"><svg viewBox="0 0 24 24"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></svg>Apps</button>
+    <button data-tab="startup"><svg viewBox="0 0 24 24"><path d="M12 3v9M6.3 6.3a8 8 0 1 0 11.4 0"/></svg>Startup</button>
+    <button data-tab="log"><svg viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 9h8M8 13h8M8 17h5"/></svg>Log</button>
+    <button data-tab="settings"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6"/></svg>Settings</button>
+  </nav>
+  <span class="live"><i id="dot"></i><span id="updated">Connecting</span></span>
+</aside>
+
+<main>
+  <section id="tab-home">
+    <div class="reveal greet">
+      <h1 id="verdict">Reading your PC</h1>
+      <p id="verdictSub" class="lede"></p>
+    </div>
+    <div class="tiles reveal">
+      <button class="tile" data-goto="memory" id="tRam"><b class="big">–</b><span class="label">Memory in use</span><span class="sub"></span></button>
+      <button class="tile" data-goto="cpu" id="tCpu"><b class="big">–</b><span class="label">Processor</span><span class="sub"></span></button>
+      <button class="tile" data-goto="storage" id="tDisk"><b class="big">–</b><span class="label">Free on C:</span><span class="sub"></span></button>
+      <button class="tile" data-goto="battery" id="tBat"><b class="big">–</b><span class="label">Battery</span><span class="sub"></span></button>
+    </div>
+    <div class="home-act reveal">
+      <button class="btn big clean-btn">Clean now</button>
+      <p class="note">Closes idle background apps marked safe, then trims every app's memory. Anything with an open window is left alone.</p>
+    </div>
+  </section>
+
+  <section id="tab-memory" hidden>
+    <div class="hero reveal">
+      <div class="readout">
+        <div class="pct"><span id="pct">0</span><small>%</small></div>
+        <p class="used"><b id="statusTxt">Reading memory</b> <span id="usedTxt"></span></p>
+      </div>
+      <div class="hero-act">
+        <button class="btn big clean-btn">Clean now</button>
+        <p class="note">Closes idle background apps marked safe, then trims every app's memory. Anything with an open window is left alone.</p>
+        <button id="trimBtn" class="btn ghost" title="Ask Windows to release idle pages from every app. Nothing is closed.">Trim only</button>
+      </div>
+    </div>
+
+    <div class="map-block reveal">
+      <div id="map" class="map" role="img" aria-label="Memory map"></div>
+      <p id="mapCaption" class="map-caption">Each cell is one slice of your RAM. Point at a cell to see who holds it.</p>
+      <div id="legend" class="legend"></div>
+      <p id="selfLine" class="map-caption"></p>
+    </div>
+
+    <div class="chart-block reveal">
+      <div class="block-head">
+        <h2>Memory over time</h2>
+        <div class="chips" id="range">
+          <button data-r="900000">15 min</button>
+          <button data-r="3600000" class="on">1 hour</button>
+          <button data-r="21600000">6 hours</button>
+        </div>
+      </div>
+      <canvas id="chart"></canvas>
+    </div>
+
+    <div class="recs-block reveal">
+      <div class="block-head">
+        <h2>What to close</h2>
+        <span class="muted" id="recSummary"></span>
+      </div>
+      <div id="recs" class="recs"></div>
+      <div id="startupHint"></div>
+    </div>
+  </section>
+
+  <section id="tab-cpu" hidden>
+    <div class="hero reveal">
+      <div class="readout">
+        <div class="pct" id="cpuBigWrap"><span id="cpuBig">–</span><small id="cpuUnit"></small></div>
+        <p class="used" id="cpuStatus">Reading the processor</p>
+      </div>
+      <div class="facts" id="cpuFacts"></div>
+    </div>
+    <p class="sensor-note" id="sensorNote" hidden></p>
+
+    <div class="cores-block reveal">
+      <div class="block-head"><h2 id="cpuName">Cores</h2><span class="muted" id="coreCaption"></span></div>
+      <div id="cores" class="cores"></div>
+    </div>
+
+    <div class="chart-block reveal">
+      <div class="block-head">
+        <h2>Temperature and load</h2>
+        <div class="chips" id="cpuRange">
+          <button data-cr="900000">15 min</button>
+          <button data-cr="3600000" class="on">1 hour</button>
+          <button data-cr="21600000">6 hours</button>
+        </div>
+      </div>
+      <canvas id="cpuChart"></canvas>
+      <div class="key"><span><i class="k-temp"></i>Temperature, °C</span><span><i class="k-load"></i>Load, %</span></div>
+    </div>
+
+    <div class="recs-block reveal">
+      <div class="block-head"><h2>What is using the processor</h2><span class="muted">Share of the whole processor right now</span></div>
+      <div id="cpuTop" class="recs"></div>
+    </div>
+
+    <div class="recs-block reveal">
+      <div class="block-head"><h2>Graphics</h2><button class="btn ghost small" data-goto="gpu">More in Graphics</button></div>
+      <div id="gpu" class="gpu"></div>
+    </div>
+  </section>
+
+  <section id="tab-gpu" hidden>
+    <div class="hero reveal">
+      <div class="readout">
+        <div class="pct" id="gpuBigWrap"><span id="gpuBig">–</span><small id="gpuUnit"></small></div>
+        <p class="used" id="gpuStatus">Reading the graphics card</p>
+      </div>
+      <div class="facts" id="gpuFacts"></div>
+    </div>
+    <p class="sensor-note" id="gpuNote" hidden></p>
+
+    <div class="cores-block reveal">
+      <div class="block-head"><h2 id="gpuName">Engines</h2><span class="muted">How busy each part of the graphics card is</span></div>
+      <div id="gpuEngines" class="cores engines"></div>
+    </div>
+
+    <div class="chart-block reveal">
+      <div class="block-head">
+        <h2>Temperature and load</h2>
+        <div class="chips" id="gpuRange">
+          <button data-gr="300000" class="on">5 min</button>
+          <button data-gr="900000">15 min</button>
+          <button data-gr="3600000">1 hour</button>
+        </div>
+      </div>
+      <canvas id="gpuChart"></canvas>
+      <div class="key"><span><i class="k-temp"></i>Temperature, °C</span><span><i class="k-load"></i>Load, %</span><span>Recorded only while this page is open, so the graphics card can sleep the rest of the time.</span></div>
+    </div>
+
+    <div class="recs-block reveal">
+      <div class="block-head"><h2>What is using graphics</h2><span class="muted">Each app's busiest engine, on either graphics chip</span></div>
+      <div id="gpuApps" class="recs"></div>
+    </div>
+
+    <div class="recs-block reveal">
+      <div class="block-head"><h2>Both graphics chips</h2><span class="muted">Windows uses the Radeon for everyday work and wakes the RTX for games and heavy apps</span></div>
+      <div id="adapters" class="gpu adapters"></div>
+    </div>
+
+    <div class="recs-block reveal">
+      <div class="block-head"><h2>Details</h2></div>
+      <div id="gpuDetails" class="facts four"></div>
+    </div>
+  </section>
+
+  <section id="tab-storage" hidden>
+    <div class="hero reveal">
+      <div class="readout">
+        <div class="pct" id="diskBigWrap"><span id="diskBig">–</span><small>GB</small></div>
+        <p class="used" id="diskSub">Free on C:</p>
+      </div>
+      <div class="facts" id="diskFacts"></div>
+    </div>
+
+    <div class="usage-block reveal">
+      <div class="block-head"><h2>What fills C:</h2><button class="btn ghost small" id="usageBtn">Measure C:</button></div>
+      <div id="usageBar" class="usage-bar"></div>
+      <div id="usageLegend" class="legend"></div>
+      <p class="map-caption" id="usageNote">Measuring takes a few seconds. It reads file sizes only and changes nothing.</p>
+    </div>
+
+    <div class="recs-block reveal">
+      <div class="block-head"><h2>Biggest folders</h2><div class="crumbs" id="crumbs"></div></div>
+      <div id="folders" class="folders"></div>
+    </div>
+
+    <div class="recs-block reveal">
+      <div class="block-head"><h2>Old caches</h2><button class="btn ghost small" id="cacheBtn">Measure caches</button></div>
+      <p class="lead" id="cacheLead"></p>
+      <div id="cacheList" class="cats"></div>
+      <div class="finder-bar" id="cacheBar" hidden><span id="cacheSel"></span><button class="btn danger" id="cacheGo">Move to Recycle Bin</button></div>
+    </div>
+
+    <div class="recs-block reveal">
+      <div class="block-head"><h2>Recycle Bin and system files</h2></div>
+      <div id="sysFiles" class="folders"></div>
+    </div>
+
+    <div class="recs-block reveal" id="otherDrives" hidden>
+      <div class="block-head"><h2>Other drives</h2></div>
+      <div id="driveList" class="folders"></div>
+    </div>
+  </section>
+
+  <section id="tab-clean" hidden>
+    <div class="hero reveal">
+      <div class="readout">
+        <div class="pct"><span id="cleanBig">–</span><small id="cleanUnit"></small></div>
+        <p class="used" id="cleanSub">Measuring what can be cleaned</p>
+      </div>
+      <div class="hero-act">
+        <button class="btn big" id="cleanRun">Clean selected</button>
+        <p class="note">Temporary files and caches are deleted for good; apps rebuild them as they need them. Nothing here touches your documents.</p>
+        <button class="btn ghost" id="cleanRescan">Measure again</button>
+      </div>
+    </div>
+    <div id="cats" class="cats reveal"></div>
+
+    <div class="recs-block reveal">
+      <div class="block-head"><h2>Old Windows update backups</h2><span class="muted">Uses Windows' own DISM tool. Clean-up can take 10 minutes or more.</span></div>
+      <div id="dism" class="dism"></div>
+    </div>
+
+    <div class="recs-block reveal">
+      <div class="block-head"><h2>Big and duplicate files</h2><button class="btn ghost small" id="finderBtn">Look for them</button></div>
+      <p class="lead">Looks in Downloads, Desktop, Documents, Videos and Pictures. Never inside code projects, Salon Shaila folders, hidden files or your Keep list. Nothing is ticked for you, and what you remove goes to the Recycle Bin.</p>
+      <div id="finder"></div>
+      <div class="finder-bar" id="finderBar" hidden><span id="finderSel"></span><button class="btn danger" id="finderDelete">Move to Recycle Bin</button></div>
+    </div>
+  </section>
+
+  <section id="tab-battery" hidden>
+    <div class="hero reveal">
+      <div class="readout">
+        <div class="pct" id="batBigWrap"><span id="batBig">–</span><small>%</small></div>
+        <p class="used" id="batStatus">Reading the battery</p>
+      </div>
+      <div class="facts" id="batFacts"></div>
+    </div>
+
+    <div class="chart-block reveal">
+      <div class="block-head"><h2>Capacity over time</h2><span class="muted" id="wearCaption"></span></div>
+      <canvas id="wearChart"></canvas>
+    </div>
+
+    <div class="recs-block reveal">
+      <div class="block-head"><h2>Charge care</h2><span class="muted">Stopping short of 100% slows battery wear</span></div>
+      <div id="care"></div>
+    </div>
+  </section>
+
+  <section id="tab-apps" hidden>
+    <div class="page-head reveal">
+      <h2>Every app in memory</h2>
+      <input id="filter" type="search" placeholder="Filter apps and processes" aria-label="Filter apps and processes">
+    </div>
+    <p class="muted lead">Sizes are working set, what each process holds in RAM right now. Shared memory can be counted in more than one process.</p>
+    <div class="table-wrap"><table id="appsTable"><thead><tr><th></th><th>App</th><th class="num">Processes</th><th class="num">Memory</th><th class="bar-col"></th><th></th></tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <section id="tab-startup" hidden>
+    <div class="page-head reveal"><h2>Apps that start with Windows</h2></div>
+    <p class="muted lead">Turning one off uses the same switch as Task Manager's Startup apps. It is reversible and uninstalls nothing.</p>
+    <div class="table-wrap"><table id="startupTable"><thead><tr><th>Name</th><th>Command</th><th>Source</th><th>Hint</th><th class="num">Enabled</th></tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <section id="tab-log" hidden>
+    <div class="page-head reveal"><h2>Everything Shimmy has done</h2></div>
+    <p class="muted lead">Every close, trim and startup change, including what RAM Optimizer did before Shimmy replaced it.</p>
+    <div class="table-wrap"><table id="logTable"><thead><tr><th>Time</th><th>Action</th><th>Target</th><th>Detail</th></tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <section id="tab-settings" hidden>
+    <div class="page-head reveal"><h2>Settings</h2></div>
+    <p class="muted lead">Changes are saved as you make them. Everything automatic is also written to the Log.</p>
+    <div id="settings"></div>
+  </section>
+</main>
+
+<dialog id="modal"><div id="modalBody"></div></dialog>
+<div id="toasts" aria-live="polite"></div>
+<script src="app.js"></script>
+</body>
+</html>

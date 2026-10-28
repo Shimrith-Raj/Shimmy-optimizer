@@ -1,0 +1,933 @@
+{
+ "groups": [
+  {
+   "app": "Windows system",
+   "mb": 4609,
+   "count": 150,
+   "protected": true,
+   "reason": "Windows system",
+   "pids": [
+    3384,
+    4912,
+    8716,
+    1980,
+    4020,
+    236,
+    8448,
+    5568,
+    4836,
+    4852,
+    11596,
+    1660,
+    4,
+    11440,
+    19744,
+    7680,
+    6244,
+    1528,
+    11376,
+    9432,
+    7520,
+    8176,
+    7628,
+    4892,
+    3036,
+    4668,
+    12956,
+    11980,
+    3932,
+    4884,
+    11312,
+    3196,
+    6504,
+    4220,
+    13564,
+    2388,
+    2616,
+    8696,
+    7432,
+    14736,
+    280,
+    4436,
+    8068,
+    3204,
+    2396,
+    964,
+    19960,
+    4268,
+    1780,
+    3160,
+    1476,
+    3260,
+    12176,
+    15184,
+    3648,
+    1452,
+    23320,
+    9472,
+    10012,
+    8852,
+    15052,
+    7048,
+    2196,
+    18564,
+    12336,
+    2100,
+    3044,
+    3912,
+    9160,
+    3024,
+    2724,
+    2352,
+    7964,
+    4080,
+    2092,
+    1840,
+    8108,
+    3628,
+    2108,
+    14488,
+    5456,
+    2272,
+    4900,
+    3404,
+    3472,
+    3792,
+    9240,
+    6164,
+    14852,
+    21232,
+    1184,
+    2188,
+    3380,
+    14180,
+    2700,
+    3252,
+    15096,
+    6408,
+    9292,
+    4652,
+    10308,
+    2500,
+    5308,
+    7832,
+    3480,
+    8724,
+    1876,
+    11520,
+    1688,
+    21292,
+    3076,
+    1352,
+    4860,
+    6364,
+    12936,
+    3704,
+    21412,
+    9804,
+    7644,
+    3256,
+    1360,
+    2304,
+    11756,
+    4876,
+    2044,
+    1208,
+    10460,
+    1692,
+    1516,
+    10216,
+    15196,
+    6048,
+    21392,
+    22480,
+    9332,
+    8652,
+    13336,
+    8972,
+    848,
+    10804,
+    13992,
+    7196,
+    12504,
+    2772,
+    15976,
+    3844,
+    15084,
+    20328,
+    7252,
+    1368
+   ]
+  },
+  {
+   "app": "Claude",
+   "mb": 1089,
+   "count": 12,
+   "protected": true,
+   "reason": "Claude",
+   "pids": [
+    14084,
+    16744,
+    8044,
+    13080,
+    13068,
+    14608,
+    3320,
+    1524,
+    6860,
+    4948,
+    19824,
+    9956
+   ]
+  },
+  {
+   "app": "Brave",
+   "mb": 540,
+   "count": 26,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    8868,
+    16696,
+    10260,
+    13496,
+    11740,
+    3284,
+    11160,
+    22904,
+    12292,
+    13876,
+    20592,
+    17228,
+    1968,
+    6816,
+    17568,
+    17924,
+    19296,
+    3692,
+    17808,
+    17784,
+    16660,
+    4352,
+    1836,
+    4680,
+    4580,
+    11148
+   ]
+  },
+  {
+   "app": "Microsoft Edge",
+   "mb": 467,
+   "count": 10,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    16844,
+    19072,
+    15872,
+    19720,
+    19428,
+    8296,
+    17064,
+    4388,
+    20016,
+    2864
+   ]
+  },
+  {
+   "app": "powershell",
+   "mb": 194,
+   "count": 3,
+   "protected": true,
+   "reason": "Terminal / shell",
+   "pids": [
+    4964,
+    16620,
+    19792
+   ]
+  },
+  {
+   "app": "Telegram",
+   "mb": 160,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    12112
+   ]
+  },
+  {
+   "app": "Edge WebView2",
+   "mb": 137,
+   "count": 12,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    10400,
+    13228,
+    11088,
+    11096,
+    10856,
+    12868,
+    12860,
+    12512,
+    11244,
+    10640,
+    6684,
+    7352
+   ]
+  },
+  {
+   "app": "Node.js",
+   "mb": 89,
+   "count": 2,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    5900,
+    22216
+   ]
+  },
+  {
+   "app": "MCP · PDF Viewer",
+   "mb": 73,
+   "count": 4,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    13188,
+    16760,
+    15056,
+    13696
+   ]
+  },
+  {
+   "app": "SearchFilterHost",
+   "mb": 69,
+   "count": 5,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    16308,
+    8636,
+    20132,
+    2704,
+    22420
+   ]
+  },
+  {
+   "app": "Adobe Creative Cloud",
+   "mb": 61,
+   "count": 3,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    12496,
+    6764,
+    12484
+   ]
+  },
+  {
+   "app": "vctip",
+   "mb": 57,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    16024
+   ]
+  },
+  {
+   "app": "WindowsTerminal",
+   "mb": 56,
+   "count": 1,
+   "protected": true,
+   "reason": "Terminal / shell",
+   "pids": [
+    20848
+   ]
+  },
+  {
+   "app": "MCP · Desktop Commander",
+   "mb": 53,
+   "count": 2,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    17504,
+    20332
+   ]
+  },
+  {
+   "app": "MCP · Windows-MCP",
+   "mb": 49,
+   "count": 4,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    9084,
+    9424,
+    10412,
+    10016
+   ]
+  },
+  {
+   "app": "AsusSoftwareManagerAgent",
+   "mb": 45,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    15112
+   ]
+  },
+  {
+   "app": "cowork-svc",
+   "mb": 39,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    7664
+   ]
+  },
+  {
+   "app": "Widgets",
+   "mb": 38,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    9872
+   ]
+  },
+  {
+   "app": "vmms",
+   "mb": 37,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    3104
+   ]
+  },
+  {
+   "app": "SearchProtocolHost",
+   "mb": 34,
+   "count": 2,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    20444,
+    8236
+   ]
+  },
+  {
+   "app": "codex-windows-sandbox-service",
+   "mb": 28,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    7696
+   ]
+  },
+  {
+   "app": "AsusAppService",
+   "mb": 27,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    4780
+   ]
+  },
+  {
+   "app": "MpDefenderCoreService",
+   "mb": 24,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    4996
+   ]
+  },
+  {
+   "app": "bash",
+   "mb": 24,
+   "count": 3,
+   "protected": true,
+   "reason": "Terminal / shell",
+   "pids": [
+    21164,
+    20356,
+    15068
+   ]
+  },
+  {
+   "app": "UltraViewer_Service",
+   "mb": 23,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    4868
+   ]
+  },
+  {
+   "app": "RtkAudUService64",
+   "mb": 22,
+   "count": 2,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    8428,
+    13492
+   ]
+  },
+  {
+   "app": "AsusSystemAnalysis",
+   "mb": 20,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    4808
+   ]
+  },
+  {
+   "app": "AsusSoftwareManager",
+   "mb": 20,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    4844
+   ]
+  },
+  {
+   "app": "vmwp",
+   "mb": 19,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    14324
+   ]
+  },
+  {
+   "app": "MCP · Premiere Pro",
+   "mb": 18,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    17124
+   ]
+  },
+  {
+   "app": "MCP · CapCut",
+   "mb": 18,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    22432
+   ]
+  },
+  {
+   "app": "AggregatorHost",
+   "mb": 17,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    6292
+   ]
+  },
+  {
+   "app": "AsusOSD",
+   "mb": 17,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    11908
+   ]
+  },
+  {
+   "app": "vmcompute",
+   "mb": 15,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    4356
+   ]
+  },
+  {
+   "app": "AppleMobileDeviceService",
+   "mb": 15,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    4828
+   ]
+  },
+  {
+   "app": "AsusOptimization",
+   "mb": 14,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    4260
+   ]
+  },
+  {
+   "app": "AsusOptimizationStartupTask",
+   "mb": 14,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    8320
+   ]
+  },
+  {
+   "app": "AsusSystemDiagnosis",
+   "mb": 13,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    4820
+   ]
+  },
+  {
+   "app": "AsusSwitch",
+   "mb": 12,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    4792
+   ]
+  },
+  {
+   "app": "Intel_PIE_Service",
+   "mb": 12,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    1552
+   ]
+  },
+  {
+   "app": "wlanext",
+   "mb": 11,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    7456
+   ]
+  },
+  {
+   "app": "LockApp",
+   "mb": 11,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    11444
+   ]
+  },
+  {
+   "app": "ShellHost",
+   "mb": 8,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    17236
+   ]
+  },
+  {
+   "app": "cmd",
+   "mb": 8,
+   "count": 7,
+   "protected": true,
+   "reason": "Terminal / shell",
+   "pids": [
+    22816,
+    2888,
+    1640,
+    18344,
+    20392,
+    4392,
+    23036
+   ]
+  },
+  {
+   "app": "pythonw",
+   "mb": 6,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    7620
+   ]
+  },
+  {
+   "app": "DefenderAiPlatformHost",
+   "mb": 6,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    12060
+   ]
+  },
+  {
+   "app": "DefenderSessionHelper",
+   "mb": 5,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    7292
+   ]
+  },
+  {
+   "app": "WidgetService",
+   "mb": 3,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    13452
+   ]
+  },
+  {
+   "app": "AsusSwitchNet",
+   "mb": 3,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    23372
+   ]
+  },
+  {
+   "app": "AsusSwitchAgent",
+   "mb": 3,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    12012
+   ]
+  },
+  {
+   "app": "DataExchangeHost",
+   "mb": 3,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    1964
+   ]
+  },
+  {
+   "app": "AsusOLEDShifter",
+   "mb": 2,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    12244
+   ]
+  },
+  {
+   "app": "OpenConsole",
+   "mb": 2,
+   "count": 1,
+   "protected": true,
+   "reason": "Terminal / shell",
+   "pids": [
+    22852
+   ]
+  },
+  {
+   "app": "chrome-native-host",
+   "mb": 2,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    21860
+   ]
+  },
+  {
+   "app": "MoNotificationUx",
+   "mb": 1,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    14844
+   ]
+  },
+  {
+   "app": "AdobeNotificationClient",
+   "mb": 0,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    5160
+   ]
+  },
+  {
+   "app": "SystemSettings",
+   "mb": 0,
+   "count": 1,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    2840
+   ]
+  },
+  {
+   "app": "uv",
+   "mb": 0,
+   "count": 2,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    16980,
+    5372
+   ]
+  },
+  {
+   "app": "windows-mcp",
+   "mb": 0,
+   "count": 2,
+   "protected": false,
+   "reason": null,
+   "pids": [
+    13388,
+    16372
+   ]
+  }
+ ],
+ "recs": [
+  {
+   "id": "edge",
+   "title": "Close Microsoft Edge",
+   "app": "Microsoft Edge",
+   "risk": "low",
+   "action": "close",
+   "pids": [
+    16844,
+    19072,
+    15872,
+    19720,
+    19428,
+    8296,
+    17064,
+    4388,
+    20016,
+    2864
+   ],
+   "savingsMB": 467,
+   "why": "You're also running Brave. Edge is most likely idling in the background."
+  },
+  {
+   "id": "webview2",
+   "title": "Edge WebView2 runtimes",
+   "app": "Edge WebView2",
+   "risk": "review",
+   "action": "close",
+   "pids": [
+    10400,
+    13228,
+    11088,
+    11096,
+    10856,
+    12868,
+    12860,
+    12512,
+    11244,
+    10640,
+    6684,
+    7352
+   ],
+   "savingsMB": 134,
+   "why": "Apps (widgets, Teams, Phone Link, etc.) embed these. Closing them shuts those app panels until you reopen them."
+  },
+  {
+   "id": "adobe-cc",
+   "title": "Adobe Creative Cloud background",
+   "app": "Adobe Creative Cloud",
+   "risk": "review",
+   "action": "close",
+   "pids": [
+    12496,
+    6764,
+    12484
+   ],
+   "savingsMB": 61,
+   "why": "No Adobe app is open, so these helpers are idle. They relaunch on their own when you open Premiere or other Adobe apps."
+  },
+  {
+   "id": "dup-MCP · PDF Viewer",
+   "title": "Duplicate server: MCP · PDF Viewer",
+   "app": "MCP · PDF Viewer",
+   "risk": "review",
+   "action": "close",
+   "pids": [
+    16760
+   ],
+   "savingsMB": 18,
+   "why": "2 copies are running (probably the Claude desktop app and Claude Code each started one). This closes the older 1 and keeps the newest. The app that owned the closed one may show the tool as disconnected until it is restarted."
+  },
+  {
+   "id": "idle-MCP · Premiere Pro",
+   "title": "Premiere Pro bridge is idle",
+   "app": "MCP · Premiere Pro",
+   "risk": "review",
+   "action": "close",
+   "pids": [
+    17124
+   ],
+   "savingsMB": 18,
+   "why": "Premiere Pro isn't open, so this editing bridge is doing nothing. Restart Claude (or reconnect the server) when you next edit."
+  },
+  {
+   "id": "idle-MCP · CapCut",
+   "title": "CapCut bridge is idle",
+   "app": "MCP · CapCut",
+   "risk": "review",
+   "action": "close",
+   "pids": [
+    22432
+   ],
+   "savingsMB": 18,
+   "why": "CapCut isn't open, so this editing bridge is doing nothing. Restart Claude (or reconnect the server) when you next edit."
+  },
+  {
+   "id": "multi-browser",
+   "title": "2 browsers open at once",
+   "app": null,
+   "risk": "low",
+   "action": "info",
+   "pids": [],
+   "savingsMB": 0,
+   "why": "Brave, Microsoft Edge are using 1007 MB combined. Sticking to one browser is the single biggest saving available."
+  }
+ ]
+}

@@ -1,0 +1,27 @@
+﻿{
+    "writeBackSameValue":  null,
+    "raw":  "0x00000000",
+    "limitPct":  0,
+    "methods":  [
+                    "INIT(State,Status)",
+                    "BSTS(instance_key_status)",
+                    "SFUN(Report_supported_functions_applications)",
+                    "WDOG(watchdog_timer_control,timer_or_status)",
+                    "KBNI(simulated_keyboard_notification)",
+                    "SCDG(Get_specific_calibration_data,offset,data)",
+                    "SPEC(Get_specification_or_model_type,result)",
+                    "OSVR(Inform_BIOS_current_OS_version,Status)",
+                    "VERS(Application_version,get_implemented_version,implemented_version_in_BIOS)",
+                    "SPBL(display_brightness_level,result)",
+                    "SDSP(display_mode,Status)",
+                    "GDSP(get_display_mode,Status)",
+                    "GLCD(return_panel_EDID)",
+                    "ANVI(SLP_mode,result)",
+                    "CBIF(Control_BIOS_internal_flags,Status)",
+                    "MWGF(Control_Flag,Device_ID,result)",
+                    "DSTS(Device_ID,device_status)",
+                    "DEVS(Control_status,Device_ID,result)",
+                    "FANL(Control_func,result)"
+                ],
+    "supported":  false
+}

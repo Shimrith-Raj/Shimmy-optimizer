@@ -1,0 +1,1066 @@
+﻿[
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "CPU Core #1",
+        "kind":  "Load",
+        "value":  3.57
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "CPU Core #2",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "CPU Core #3",
+        "kind":  "Load",
+        "value":  3.53
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "CPU Core #4",
+        "kind":  "Load",
+        "value":  1.18
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "CPU Core #5",
+        "kind":  "Load",
+        "value":  2.41
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "CPU Core #6",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "CPU Core #7",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "CPU Core #8",
+        "kind":  "Load",
+        "value":  1.18
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "CPU Core #9",
+        "kind":  "Load",
+        "value":  1.19
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "CPU Core #10",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "CPU Core #11",
+        "kind":  "Load",
+        "value":  9.64
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "CPU Core #12",
+        "kind":  "Load",
+        "value":  1.19
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "CPU Core #13",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "CPU Core #14",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "CPU Core #15",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "CPU Core #16",
+        "kind":  "Load",
+        "value":  1.18
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "CPU Total",
+        "kind":  "Load",
+        "value":  1.57
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "CPU Core Max",
+        "kind":  "Load",
+        "value":  9.64
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Package",
+        "kind":  "Power",
+        "value":  4.8
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Cores (Average)",
+        "kind":  "Clock",
+        "value":  1536
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Cores (Average Effective)",
+        "kind":  "Clock",
+        "value":  51
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #1",
+        "kind":  "Clock",
+        "value":  1373
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #1 (Effective)",
+        "kind":  "Clock",
+        "value":  51.5
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #1",
+        "kind":  "Factor",
+        "value":  23.4
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #1 (SMU)",
+        "kind":  "Power",
+        "value":  0.18
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #1 VID",
+        "kind":  "Voltage",
+        "value":  0.77
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #2",
+        "kind":  "Clock",
+        "value":  1470
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #2 (Effective)",
+        "kind":  "Clock",
+        "value":  80.5
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #2",
+        "kind":  "Factor",
+        "value":  23.4
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #2 (SMU)",
+        "kind":  "Power",
+        "value":  0.16
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #2 VID",
+        "kind":  "Voltage",
+        "value":  0.79
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #3",
+        "kind":  "Clock",
+        "value":  1456
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #3 (Effective)",
+        "kind":  "Clock",
+        "value":  27
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #3",
+        "kind":  "Factor",
+        "value":  23.4
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #3 (SMU)",
+        "kind":  "Power",
+        "value":  0.04
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #3 VID",
+        "kind":  "Voltage",
+        "value":  0.79
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #4",
+        "kind":  "Clock",
+        "value":  1880
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #4 (Effective)",
+        "kind":  "Clock",
+        "value":  67
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #4",
+        "kind":  "Factor",
+        "value":  29.25
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #4 (SMU)",
+        "kind":  "Power",
+        "value":  0.1
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #4 VID",
+        "kind":  "Voltage",
+        "value":  0.89
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #5",
+        "kind":  "Clock",
+        "value":  1300
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #5 (Effective)",
+        "kind":  "Clock",
+        "value":  28.5
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #5",
+        "kind":  "Factor",
+        "value":  23.4
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #5 (SMU)",
+        "kind":  "Power",
+        "value":  0.05
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #5 VID",
+        "kind":  "Voltage",
+        "value":  0.78
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #6",
+        "kind":  "Clock",
+        "value":  1905
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #6 (Effective)",
+        "kind":  "Clock",
+        "value":  65
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #6",
+        "kind":  "Factor",
+        "value":  29.25
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #6 (SMU)",
+        "kind":  "Power",
+        "value":  0.07
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #6 VID",
+        "kind":  "Voltage",
+        "value":  0.89
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #7",
+        "kind":  "Clock",
+        "value":  1393
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #7 (Effective)",
+        "kind":  "Clock",
+        "value":  18
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #7",
+        "kind":  "Factor",
+        "value":  23.4
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #7 (SMU)",
+        "kind":  "Power",
+        "value":  0.03
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #7 VID",
+        "kind":  "Voltage",
+        "value":  0.78
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #8",
+        "kind":  "Clock",
+        "value":  1510
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #8 (Effective)",
+        "kind":  "Clock",
+        "value":  67.5
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #8",
+        "kind":  "Factor",
+        "value":  23.4
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #8 (SMU)",
+        "kind":  "Power",
+        "value":  0.12
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core #8 VID",
+        "kind":  "Voltage",
+        "value":  0.79
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core (Tctl/Tdie)",
+        "kind":  "Temperature",
+        "value":  61.25
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Core (SVI2 TFN)",
+        "kind":  "Voltage",
+        "value":  1.55
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "SoC (SVI2 TFN)",
+        "kind":  "Voltage",
+        "value":  1.55
+    },
+    {
+        "hw":  "AMD Ryzen 7 5800HS with Radeon Graphics",
+        "type":  "Cpu",
+        "sensor":  "Bus Speed",
+        "kind":  "Clock",
+        "value":  99.81
+    },
+    {
+        "hw":  "Virtual Memory",
+        "type":  "Memory",
+        "sensor":  "Memory Used",
+        "kind":  "Data",
+        "value":  18.13
+    },
+    {
+        "hw":  "Virtual Memory",
+        "type":  "Memory",
+        "sensor":  "Memory Available",
+        "kind":  "Data",
+        "value":  4.41
+    },
+    {
+        "hw":  "Virtual Memory",
+        "type":  "Memory",
+        "sensor":  "Memory",
+        "kind":  "Load",
+        "value":  80.44
+    },
+    {
+        "hw":  "Total Memory",
+        "type":  "Memory",
+        "sensor":  "Memory Used",
+        "kind":  "Data",
+        "value":  8.17
+    },
+    {
+        "hw":  "Total Memory",
+        "type":  "Memory",
+        "sensor":  "Memory Available",
+        "kind":  "Data",
+        "value":  7.23
+    },
+    {
+        "hw":  "Total Memory",
+        "type":  "Memory",
+        "sensor":  "Memory",
+        "kind":  "Load",
+        "value":  53.06
+    },
+    {
+        "hw":  "AMD Radeon(TM) Graphics",
+        "type":  "GpuAmd",
+        "sensor":  "GPU Memory Total",
+        "kind":  "SmallData",
+        "value":  512
+    },
+    {
+        "hw":  "AMD Radeon(TM) Graphics",
+        "type":  "GpuAmd",
+        "sensor":  "Fullscreen FPS",
+        "kind":  "Factor",
+        "value":  -1
+    },
+    {
+        "hw":  "AMD Radeon(TM) Graphics",
+        "type":  "GpuAmd",
+        "sensor":  "D3D Dedicated Memory Total",
+        "kind":  "SmallData",
+        "value":  496.17
+    },
+    {
+        "hw":  "AMD Radeon(TM) Graphics",
+        "type":  "GpuAmd",
+        "sensor":  "D3D Dedicated Memory Free",
+        "kind":  "SmallData",
+        "value":  86.13
+    },
+    {
+        "hw":  "AMD Radeon(TM) Graphics",
+        "type":  "GpuAmd",
+        "sensor":  "D3D Dedicated Memory Used",
+        "kind":  "SmallData",
+        "value":  410.04
+    },
+    {
+        "hw":  "AMD Radeon(TM) Graphics",
+        "type":  "GpuAmd",
+        "sensor":  "D3D Shared Memory Used",
+        "kind":  "SmallData",
+        "value":  176.36
+    },
+    {
+        "hw":  "AMD Radeon(TM) Graphics",
+        "type":  "GpuAmd",
+        "sensor":  "D3D Shared Memory Free",
+        "kind":  "SmallData",
+        "value":  7710.22
+    },
+    {
+        "hw":  "AMD Radeon(TM) Graphics",
+        "type":  "GpuAmd",
+        "sensor":  "D3D Shared Memory Total",
+        "kind":  "SmallData",
+        "value":  7886.58
+    },
+    {
+        "hw":  "AMD Radeon(TM) Graphics",
+        "type":  "GpuAmd",
+        "sensor":  "D3D 3D",
+        "kind":  "Load",
+        "value":  4.62
+    },
+    {
+        "hw":  "AMD Radeon(TM) Graphics",
+        "type":  "GpuAmd",
+        "sensor":  "D3D High Priority Compute",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "AMD Radeon(TM) Graphics",
+        "type":  "GpuAmd",
+        "sensor":  "D3D Compute 0",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "AMD Radeon(TM) Graphics",
+        "type":  "GpuAmd",
+        "sensor":  "D3D Compute 1",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "AMD Radeon(TM) Graphics",
+        "type":  "GpuAmd",
+        "sensor":  "D3D Copy",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "AMD Radeon(TM) Graphics",
+        "type":  "GpuAmd",
+        "sensor":  "D3D Timer 0",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "AMD Radeon(TM) Graphics",
+        "type":  "GpuAmd",
+        "sensor":  "D3D Security 1",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "AMD Radeon(TM) Graphics",
+        "type":  "GpuAmd",
+        "sensor":  "D3D Video Decode 1",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "AMD Radeon(TM) Graphics",
+        "type":  "GpuAmd",
+        "sensor":  "D3D Video Encode 0",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "AMD Radeon(TM) Graphics",
+        "type":  "GpuAmd",
+        "sensor":  "D3D Video Codec 0",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "AMD Radeon(TM) Graphics",
+        "type":  "GpuAmd",
+        "sensor":  "GPU Memory Used",
+        "kind":  "SmallData",
+        "value":  410
+    },
+    {
+        "hw":  "AMD Radeon(TM) Graphics",
+        "type":  "GpuAmd",
+        "sensor":  "GPU Memory Free",
+        "kind":  "SmallData",
+        "value":  102
+    },
+    {
+        "hw":  "AMD Radeon(TM) Graphics",
+        "type":  "GpuAmd",
+        "sensor":  "GPU Core",
+        "kind":  "Clock",
+        "value":  400
+    },
+    {
+        "hw":  "AMD Radeon(TM) Graphics",
+        "type":  "GpuAmd",
+        "sensor":  "GPU Memory",
+        "kind":  "Clock",
+        "value":  1600
+    },
+    {
+        "hw":  "AMD Radeon(TM) Graphics",
+        "type":  "GpuAmd",
+        "sensor":  "GPU Core",
+        "kind":  "Load",
+        "value":  3
+    },
+    {
+        "hw":  "NVIDIA GeForce RTX 3050 Laptop GPU",
+        "type":  "GpuNvidia",
+        "sensor":  "GPU Core",
+        "kind":  "Temperature",
+        "value":  45
+    },
+    {
+        "hw":  "NVIDIA GeForce RTX 3050 Laptop GPU",
+        "type":  "GpuNvidia",
+        "sensor":  "GPU Core",
+        "kind":  "Clock",
+        "value":  210
+    },
+    {
+        "hw":  "NVIDIA GeForce RTX 3050 Laptop GPU",
+        "type":  "GpuNvidia",
+        "sensor":  "GPU Memory",
+        "kind":  "Clock",
+        "value":  405
+    },
+    {
+        "hw":  "NVIDIA GeForce RTX 3050 Laptop GPU",
+        "type":  "GpuNvidia",
+        "sensor":  "GPU Core",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "NVIDIA GeForce RTX 3050 Laptop GPU",
+        "type":  "GpuNvidia",
+        "sensor":  "GPU Memory Controller",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "NVIDIA GeForce RTX 3050 Laptop GPU",
+        "type":  "GpuNvidia",
+        "sensor":  "GPU Video Engine",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "NVIDIA GeForce RTX 3050 Laptop GPU",
+        "type":  "GpuNvidia",
+        "sensor":  "GPU Bus",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "NVIDIA GeForce RTX 3050 Laptop GPU",
+        "type":  "GpuNvidia",
+        "sensor":  "GPU Core Voltage",
+        "kind":  "Voltage",
+        "value":  0.62
+    },
+    {
+        "hw":  "NVIDIA GeForce RTX 3050 Laptop GPU",
+        "type":  "GpuNvidia",
+        "sensor":  "D3D Dedicated Memory Used",
+        "kind":  "SmallData",
+        "value":  105.66
+    },
+    {
+        "hw":  "NVIDIA GeForce RTX 3050 Laptop GPU",
+        "type":  "GpuNvidia",
+        "sensor":  "D3D Shared Memory Used",
+        "kind":  "SmallData",
+        "value":  9.75
+    },
+    {
+        "hw":  "NVIDIA GeForce RTX 3050 Laptop GPU",
+        "type":  "GpuNvidia",
+        "sensor":  "D3D 3D",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "NVIDIA GeForce RTX 3050 Laptop GPU",
+        "type":  "GpuNvidia",
+        "sensor":  "D3D Overlay",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "NVIDIA GeForce RTX 3050 Laptop GPU",
+        "type":  "GpuNvidia",
+        "sensor":  "D3D Video Decode",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "NVIDIA GeForce RTX 3050 Laptop GPU",
+        "type":  "GpuNvidia",
+        "sensor":  "D3D Copy",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "NVIDIA GeForce RTX 3050 Laptop GPU",
+        "type":  "GpuNvidia",
+        "sensor":  "D3D Copy",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "NVIDIA GeForce RTX 3050 Laptop GPU",
+        "type":  "GpuNvidia",
+        "sensor":  "D3D Security",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "NVIDIA GeForce RTX 3050 Laptop GPU",
+        "type":  "GpuNvidia",
+        "sensor":  "D3D Video Encode",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "NVIDIA GeForce RTX 3050 Laptop GPU",
+        "type":  "GpuNvidia",
+        "sensor":  "D3D Optical Flow Accelerator 0",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "NVIDIA GeForce RTX 3050 Laptop GPU",
+        "type":  "GpuNvidia",
+        "sensor":  "D3D VR",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "NVIDIA GeForce RTX 3050 Laptop GPU",
+        "type":  "GpuNvidia",
+        "sensor":  "D3D Copy",
+        "kind":  "Load",
+        "value":  0.03
+    },
+    {
+        "hw":  "NVIDIA GeForce RTX 3050 Laptop GPU",
+        "type":  "GpuNvidia",
+        "sensor":  "D3D Copy",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "NVIDIA GeForce RTX 3050 Laptop GPU",
+        "type":  "GpuNvidia",
+        "sensor":  "D3D Copy",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "NVIDIA GeForce RTX 3050 Laptop GPU",
+        "type":  "GpuNvidia",
+        "sensor":  "D3D Copy",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "NVIDIA GeForce RTX 3050 Laptop GPU",
+        "type":  "GpuNvidia",
+        "sensor":  "GPU Hot Spot",
+        "kind":  "Temperature",
+        "value":  52.09
+    },
+    {
+        "hw":  "NVIDIA GeForce RTX 3050 Laptop GPU",
+        "type":  "GpuNvidia",
+        "sensor":  "GPU Memory Total",
+        "kind":  "SmallData",
+        "value":  4096
+    },
+    {
+        "hw":  "NVIDIA GeForce RTX 3050 Laptop GPU",
+        "type":  "GpuNvidia",
+        "sensor":  "GPU Memory Free",
+        "kind":  "SmallData",
+        "value":  3860
+    },
+    {
+        "hw":  "NVIDIA GeForce RTX 3050 Laptop GPU",
+        "type":  "GpuNvidia",
+        "sensor":  "GPU Memory Used",
+        "kind":  "SmallData",
+        "value":  235
+    },
+    {
+        "hw":  "NVIDIA GeForce RTX 3050 Laptop GPU",
+        "type":  "GpuNvidia",
+        "sensor":  "GPU Memory",
+        "kind":  "Load",
+        "value":  5.74
+    },
+    {
+        "hw":  "NVIDIA GeForce RTX 3050 Laptop GPU",
+        "type":  "GpuNvidia",
+        "sensor":  "GPU Package",
+        "kind":  "Power",
+        "value":  10.08
+    },
+    {
+        "hw":  "NVIDIA GeForce RTX 3050 Laptop GPU",
+        "type":  "GpuNvidia",
+        "sensor":  "GPU PCIe Rx",
+        "kind":  "Throughput",
+        "value":  0
+    },
+    {
+        "hw":  "NVIDIA GeForce RTX 3050 Laptop GPU",
+        "type":  "GpuNvidia",
+        "sensor":  "GPU PCIe Tx",
+        "kind":  "Throughput",
+        "value":  0
+    },
+    {
+        "hw":  "INTEL SSDPEKNU512GZ",
+        "type":  "Storage",
+        "sensor":  "Composite Temperature",
+        "kind":  "Temperature",
+        "value":  37
+    },
+    {
+        "hw":  "INTEL SSDPEKNU512GZ",
+        "type":  "Storage",
+        "sensor":  "Warning Temperature",
+        "kind":  "Temperature",
+        "value":  76
+    },
+    {
+        "hw":  "INTEL SSDPEKNU512GZ",
+        "type":  "Storage",
+        "sensor":  "Critical Temperature",
+        "kind":  "Temperature",
+        "value":  79
+    },
+    {
+        "hw":  "INTEL SSDPEKNU512GZ",
+        "type":  "Storage",
+        "sensor":  "Life",
+        "kind":  "Level",
+        "value":  96
+    },
+    {
+        "hw":  "INTEL SSDPEKNU512GZ",
+        "type":  "Storage",
+        "sensor":  "Data Read",
+        "kind":  "Data",
+        "value":  21924
+    },
+    {
+        "hw":  "INTEL SSDPEKNU512GZ",
+        "type":  "Storage",
+        "sensor":  "Data Written",
+        "kind":  "Data",
+        "value":  15250
+    },
+    {
+        "hw":  "INTEL SSDPEKNU512GZ",
+        "type":  "Storage",
+        "sensor":  "Power On Count",
+        "kind":  "Factor",
+        "value":  11680
+    },
+    {
+        "hw":  "INTEL SSDPEKNU512GZ",
+        "type":  "Storage",
+        "sensor":  "Power On Hours",
+        "kind":  "Factor",
+        "value":  1968
+    },
+    {
+        "hw":  "INTEL SSDPEKNU512GZ",
+        "type":  "Storage",
+        "sensor":  "Used Space",
+        "kind":  "Load",
+        "value":  77.38
+    },
+    {
+        "hw":  "INTEL SSDPEKNU512GZ",
+        "type":  "Storage",
+        "sensor":  "Free Space",
+        "kind":  "Data",
+        "value":  115.83
+    },
+    {
+        "hw":  "INTEL SSDPEKNU512GZ",
+        "type":  "Storage",
+        "sensor":  "Total Space",
+        "kind":  "Data",
+        "value":  512.11
+    },
+    {
+        "hw":  "INTEL SSDPEKNU512GZ",
+        "type":  "Storage",
+        "sensor":  "Read Activity",
+        "kind":  "Load",
+        "value":  0
+    },
+    {
+        "hw":  "INTEL SSDPEKNU512GZ",
+        "type":  "Storage",
+        "sensor":  "Write Activity",
+        "kind":  "Load",
+        "value":  2.4
+    },
+    {
+        "hw":  "INTEL SSDPEKNU512GZ",
+        "type":  "Storage",
+        "sensor":  "Total Activity",
+        "kind":  "Load",
+        "value":  0.84
+    },
+    {
+        "hw":  "INTEL SSDPEKNU512GZ",
+        "type":  "Storage",
+        "sensor":  "Read Rate",
+        "kind":  "Throughput",
+        "value":  0
+    },
+    {
+        "hw":  "INTEL SSDPEKNU512GZ",
+        "type":  "Storage",
+        "sensor":  "Write Rate",
+        "kind":  "Throughput",
+        "value":  94580.7
+    },
+    {
+        "hw":  "INTEL SSDPEKNU512GZ",
+        "type":  "Storage",
+        "sensor":  "Available Spare",
+        "kind":  "Level",
+        "value":  100
+    },
+    {
+        "hw":  "INTEL SSDPEKNU512GZ",
+        "type":  "Storage",
+        "sensor":  "Available Spare Threshold",
+        "kind":  "Level",
+        "value":  10
+    },
+    {
+        "hw":  "INTEL SSDPEKNU512GZ",
+        "type":  "Storage",
+        "sensor":  "Percentage Used",
+        "kind":  "Level",
+        "value":  4
+    },
+    {
+        "hw":  "ASUS Battery",
+        "type":  "Battery",
+        "sensor":  "Designed Capacity",
+        "kind":  "Energy",
+        "value":  63041
+    },
+    {
+        "hw":  "ASUS Battery",
+        "type":  "Battery",
+        "sensor":  "Fully-Charged Capacity",
+        "kind":  "Energy",
+        "value":  46250
+    },
+    {
+        "hw":  "ASUS Battery",
+        "type":  "Battery",
+        "sensor":  "Degradation Level",
+        "kind":  "Level",
+        "value":  26.64
+    },
+    {
+        "hw":  "ASUS Battery",
+        "type":  "Battery",
+        "sensor":  "Remaining Capacity",
+        "kind":  "Energy",
+        "value":  17294
+    },
+    {
+        "hw":  "ASUS Battery",
+        "type":  "Battery",
+        "sensor":  "Charge Level",
+        "kind":  "Level",
+        "value":  37.39
+    },
+    {
+        "hw":  "ASUS Battery",
+        "type":  "Battery",
+        "sensor":  "Voltage",
+        "kind":  "Voltage",
+        "value":  11.98
+    },
+    {
+        "hw":  "ASUS Battery",
+        "type":  "Battery",
+        "sensor":  "Charge Current",
+        "kind":  "Current",
+        "value":  2.18
+    },
+    {
+        "hw":  "ASUS Battery",
+        "type":  "Battery",
+        "sensor":  "Charge Rate",
+        "kind":  "Power",
+        "value":  26.14
+    }
+]

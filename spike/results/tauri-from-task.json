@@ -1,0 +1,21 @@
+{
+  "at": 1793116881,
+  "elevated": true,
+  "gpu": {
+    "loadPct": 0,
+    "name": "NVIDIA GeForce RTX 3050 Laptop GPU",
+    "ok": true,
+    "tempC": 46,
+    "vramUsedMB": 101
+  },
+  "system": {
+    "clockMHz": 1990,
+    "cpu": "AMD Ryzen 7 5800HS with Radeon Graphics",
+    "loadPct": 11.649772644042969,
+    "memTotalMB": 15773,
+    "memUsedMB": 8634,
+    "processes": 300,
+    "threads": 16
+  },
+  "windowDrew": true
+}
