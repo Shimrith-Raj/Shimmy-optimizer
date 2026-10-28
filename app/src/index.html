@@ -25,6 +25,7 @@
     <button data-tab="startup"><svg viewBox="0 0 24 24"><path d="M12 3v9M6.3 6.3a8 8 0 1 0 11.4 0"/></svg>Startup</button>
     <button data-tab="log"><svg viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 9h8M8 13h8M8 17h5"/></svg>Log</button>
     <button data-tab="settings"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6"/></svg>Settings</button>
+    <button data-tab="updates"><svg viewBox="0 0 24 24"><path d="M12 4v10M7.5 10 12 14.5 16.5 10M4 19h16"/></svg>Updates<i class="mark" id="updMark" hidden title="A new version is available"></i></button>
   </nav>
   <span class="live"><i id="dot"></i><span id="updated">Connecting</span></span>
 </aside>
@@ -296,6 +297,16 @@
     <div class="page-head reveal"><h2>Settings</h2></div>
     <p class="muted lead">Changes are saved as you make them. Everything automatic is also written to the Log.</p>
     <div id="settings"></div>
+  </section>
+
+  <section id="tab-updates" hidden>
+    <div class="page-head reveal"><h2>Updates</h2><button class="btn ghost" id="updCheck">Check now</button></div>
+    <p class="muted lead">Shimmy reads GitHub's public release info to see whether a newer version is out, and downloads the installer from there. Nothing about your PC is uploaded. The daily check can be turned off in Settings.</p>
+    <div class="facts reveal" id="updFacts"></div>
+    <div class="recs-block reveal">
+      <div class="block-head"><h2 id="updHead">Not checked yet</h2></div>
+      <div id="updBody"></div>
+    </div>
   </section>
 </main>
 

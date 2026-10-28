@@ -12,7 +12,7 @@ const COMMANDS = {
   '/api/state': 'get_state', '/api/history': 'get_history', '/api/log': 'get_log', '/api/startup': 'get_startup',
   '/api/gpu': 'get_gpu', '/api/storage': 'get_storage', '/api/usage/scan': 'start_usage_scan', '/api/folder': 'storage_folder',
   '/api/open': 'open_path', '/api/clean': 'get_clean', '/api/clean/scan': 'start_clean_scan', '/api/clean/run': 'start_clean',
-  '/api/battery': 'get_battery', '/api/settings': 'get_settings', '/api/settings/save': 'set_settings', '/api/autostart': 'set_autostart', '/api/plugged': 'set_plugged_mode', '/api/caches/scan': 'start_cache_scan', '/api/caches/run': 'start_cache_clean', '/api/folder/preview': 'folder_preview', '/api/folder/delete': 'folder_delete', '/api/bin/empty': 'empty_bin', '/api/hibernation': 'set_hibernation', '/api/restore': 'get_restore_points', '/api/apps-settings': 'open_apps_settings', '/api/charge-limit': 'set_charge_limit', '/api/fan': 'set_fan_mode', '/api/heat': 'set_heat_protection', '/api/dism': 'start_dism', '/api/finder': 'start_finder', '/api/finder/delete': 'finder_delete', '/api/startup/toggle': 'toggle_startup', '/api/close': 'close_procs', '/api/app-mark': 'set_app_mark', '/api/trim': 'trim', '/api/quickclean': 'quick_clean',
+  '/api/battery': 'get_battery', '/api/settings': 'get_settings', '/api/settings/save': 'set_settings', '/api/autostart': 'set_autostart', '/api/plugged': 'set_plugged_mode', '/api/caches/scan': 'start_cache_scan', '/api/caches/run': 'start_cache_clean', '/api/folder/preview': 'folder_preview', '/api/folder/delete': 'folder_delete', '/api/bin/empty': 'empty_bin', '/api/hibernation': 'set_hibernation', '/api/restore': 'get_restore_points', '/api/apps-settings': 'open_apps_settings', '/api/charge-limit': 'set_charge_limit', '/api/fan': 'set_fan_mode', '/api/heat': 'set_heat_protection', '/api/dism': 'start_dism', '/api/finder': 'start_finder', '/api/finder/delete': 'finder_delete', '/api/startup/toggle': 'toggle_startup', '/api/update': 'get_update', '/api/update/check': 'check_update', '/api/update/download': 'start_update_download', '/api/update/install': 'install_update', '/api/close': 'close_procs', '/api/app-mark': 'set_app_mark', '/api/trim': 'trim', '/api/quickclean': 'quick_clean',
 };
 async function api(path, body) {
   try {
@@ -301,7 +301,8 @@ function renderCpu() {
   else if (c.tempC == null) note.textContent = "The processor's temperature sensor is not answering right now, so load is shown instead. Another monitoring app (such as an ASUS utility) may be holding it; Shimmy keeps trying.";
 
   $('#cpuName').textContent = c.name || 'Cores';
-  $('#coreCaption').textContent = `${c.cores.length} cores, ${c.threads} threads. The shading is how busy each core is.`;
+  const hybrid = c.cores.some((k) => k.kind);
+  $('#coreCaption').textContent = `${c.cores.length} cores, ${c.threads} threads. The shading is how busy each core is, the number is the speed it is really running at.${hybrid ? ' P-cores are the fast ones, E-cores save power.' : ''}`;
   // Core tiles are built once and then only updated, so live refreshes slide the bars instead of replaying an animation.
   const wrap = $('#cores');
   if (wrap.children.length !== c.cores.length) wrap.innerHTML = c.cores.map(() => '<div class="core"><i class="fill"></i><b></b><span></span></div>').join('');
@@ -310,7 +311,7 @@ function renderCpu() {
     el.classList.toggle('busy', k.loadPct >= 60);
     el.querySelector('.fill').style.height = Math.min(100, k.loadPct) + '%';
     el.querySelector('b').innerHTML = k.clockMhz ? `${ghz(k.clockMhz)}<small>GHz</small>` : `${Math.round(k.loadPct)}<small>%</small>`;
-    el.querySelector('span').textContent = k.clockMhz ? `${Math.round(k.loadPct)}% busy${k.powerW != null ? `, ${k.powerW.toFixed(1)} W` : ''}` : 'busy';
+    el.querySelector('span').textContent = (k.kind ? `${k.kind}, ` : '') + (k.clockMhz ? `${Math.round(k.loadPct)}% busy` : 'busy');
   });
 
   const top = S.state.groups.filter((g) => g.cpu >= 0.5).sort((a, b) => b.cpu - a.cpu).slice(0, 6);
@@ -1221,6 +1222,7 @@ function renderSettings() {
       `<div class="rows">${marked.map(([exe, m]) => `<div class="row"><span>${esc(exe)} <span class="muted">${esc(MARK_WORDS[m] || m)}</span></span><button class="btn small ghost" data-rm-mark="${esc(exe)}">Remove</button></div>`).join('') || '<div class="row"><span class="muted">No apps marked yet.</span></div>'}</div>`),
     block('Heat protection', `When the processor stays at 90 °C or more for 30 seconds, Shimmy turns CPU boost off until it cools to 75 °C for 2 minutes. Quiet: it shows on the Processor page and in the Log.`, sw('data-set="heat.enabled"', st.heat.enabled, 'Heat protection')),
     block('Start with Windows', 'Starts Shimmy in the tray when you sign in, with administrator rights and no prompt, through a Task Scheduler task. Works on battery too.', sw('data-autostart', startWithWindows, 'Start with Windows')),
+    block('Check for updates daily', "Once a day Shimmy reads GitHub's public release info to see whether a newer version is out, and tells you once per new version. It only reads; nothing is uploaded. You can still check from the Updates page.", sw('data-set="updates.autoCheck"', st.updates.autoCheck, 'Check for updates daily')),
     block('About', 'Shimmy Optimizer, founded and built by Shimrith Raj. Open source under the MIT licence. The terms of use and the licences of the parts it includes are in the legal folder where Shimmy is installed.'),
     block('Big and duplicate files', 'Where the finder on the Clean page looks, and what it never offers. Code projects, protected work folders, hidden files and your Keep list are always left out.', '',
       `<div class="set-grid">${field('Count a file as large from', num('finder.largeMb', f.largeMb, 'MB', 50, 100000))}${field('Old caches: files untouched for', num('caches.ageDays', st.caches.ageDays, 'days', 1, 365))}</div>
@@ -1305,6 +1307,134 @@ $('#settings').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && (e.target.id === 'newRoot' || e.target.id === 'newExcl')) $(e.target.id === 'newRoot' ? '#addRoot' : '#addExcl').click();
 });
 
+// ---------- Updates ----------
+
+let updTimer = null;
+async function loadUpdates() {
+  clearTimeout(updTimer);
+  try { S.upd = await api('/api/update'); } catch (e) { return toast(e.message, true); }
+  renderUpdates();
+  if (S.upd.download.running && S.tab === 'updates') updTimer = setTimeout(loadUpdates, 500);
+}
+
+// Release notes are Markdown from GitHub. They are shown as plain paragraphs and bullets, built with textContent only.
+function notesNodes(md) {
+  const plain = (t) => t.replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/(\*\*|__|`)/g, '').trim();
+  const out = document.createDocumentFragment();
+  let list = null, para = [];
+  const add = (tag, text, parent = out) => { const el = document.createElement(tag); el.textContent = text; parent.append(el); return el; };
+  const flush = () => { if (para.length) add('p', para.join(' ')); para = []; };
+  for (const raw of String(md || '').replace(/\r/g, '').split('\n')) {
+    const line = raw.trim();
+    const bullet = line.match(/^[-*+]\s+(.*)$/);
+    const head = line.match(/^#{1,6}\s+(.*)$/);
+    if (!line) { flush(); list = null; } else if (bullet) {
+      flush();
+      if (!list) { list = document.createElement('ul'); out.append(list); }
+      add('li', plain(bullet[1]), list);
+    } else {
+      list = null;
+      if (head) { flush(); add('h4', plain(head[1])); } else para.push(plain(line));
+    }
+  }
+  flush();
+  return out;
+}
+
+const longDate = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleDateString([], { day: 'numeric', month: 'long', year: 'numeric' }); };
+
+function renderUpdates() {
+  const u = S.upd;
+  if (!u) return;
+  const r = u.release, dl = u.download;
+  const facts = [
+    [u.current, 'This version'],
+    [r ? r.latest : '–', 'Newest version'],
+    [u.lastCheck ? ago(u.lastCheck) : 'Never', u.autoCheck ? 'Last checked, and once a day' : 'Last checked. The daily check is off'],
+  ];
+  $('#updFacts').innerHTML = facts.map(([v, l]) => `<div><b>${esc(v)}</b><span>${esc(l)}</span></div>`).join('');
+  $('#updCheck').disabled = S.updChecking || dl.running;
+  $('#updCheck').textContent = S.updChecking ? 'Checking' : 'Check now';
+  const body = $('#updBody');
+  body.textContent = '';
+  const html = (s) => { const d = document.createElement('div'); d.innerHTML = s; return d.firstElementChild; };
+  const note = (cls, text) => { const p = document.createElement('p'); p.className = cls; p.textContent = text; body.append(p); };
+  if (S.updError) note('warn-box', S.updError);
+  if (!r) {
+    $('#updHead').textContent = 'Not checked yet';
+    if (!S.updError) body.append(html('<div class="empty">Press Check now to see whether a newer version is out.</div>'));
+    return;
+  }
+  if (!r.newer) {
+    $('#updHead').textContent = 'You are up to date';
+    body.append(html(`<div class="empty">Shimmy ${esc(r.current)} is the newest version${r.published ? `, released ${esc(longDate(r.published))}` : ''}.</div>`));
+    return;
+  }
+  $('#updHead').textContent = `Shimmy ${r.latest} is available`;
+  const size = r.assetSize ? `, ${fmtB(r.assetSize)}` : '';
+  let acts = '', status = `${r.name}${r.published ? `, released ${longDate(r.published)}` : ''}. You have ${r.current}.`;
+  if (r.problem) status = r.problem;
+  else if (dl.running) {
+    const pct = u.total ? Math.min(100, Math.round((u.bytes / u.total) * 100)) : 0;
+    status = `Downloading${u.total ? `, ${fmtB(u.bytes)} of ${fmtB(u.total)}` : ''}.`;
+    acts = `<div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><i style="width:${pct}%"></i></div>`;
+  } else if (dl.result) {
+    status = `Downloaded and checked: the SHA-256 matches the release. Install closes Shimmy and opens the installer.`;
+    acts = '<button class="btn" id="updInstall">Install</button>';
+  } else acts = `<button class="btn" id="updDownload">Download${esc(size)}</button>`;
+  const err = dl.error && !dl.running ? `<p class="warn-box"></p>` : '';
+  const row = html(`<div class="hold"><div><b>Shimmy ${esc(r.latest)}</b><p></p></div><div class="upd-acts">${dl.running ? '' : acts}</div></div>`);
+  row.querySelector('p').textContent = status;
+  body.append(row);
+  if (dl.running) body.append(html(acts));
+  if (err) { const w = html(err); w.textContent = dl.error; body.append(w); }
+  const notes = html('<div class="set-block"><div class="set-head"><div><h3>What is new</h3></div></div><div class="notes"></div></div>');
+  notes.querySelector('.notes').append(notesNodes(r.notes));
+  if (!r.notes.trim()) notes.querySelector('.notes').textContent = 'This release has no notes.';
+  body.append(notes);
+}
+
+async function checkUpdates() {
+  S.updChecking = true; S.updError = '';
+  renderUpdates();
+  try { S.upd = await api('/api/update/check'); if (S.state) S.state.updateAvailable = S.upd.release?.newer ? S.upd.release.latest : null; }
+  catch (e) { S.updError = e.message; }
+  S.updChecking = false;
+  setUpdMark();
+  renderUpdates();
+}
+
+function setUpdMark() { $('#updMark').hidden = !(S.state && S.state.updateAvailable); }
+
+function confirmInstall(version) {
+  return new Promise((resolve) => {
+    $('#modalBody').innerHTML = `<h3>Install Shimmy ${esc(version)}?</h3>
+      <div class="muted">Shimmy will close and the installer will open. Follow it to the end; Shimmy starts again with Windows or from the Start menu.</div>
+      <div class="modal-actions"><button class="btn ghost" id="mCancel">Not now</button><button class="btn" id="mOk">Close Shimmy and install</button></div>`;
+    let answer = false;
+    $('#modal').addEventListener('close', () => resolve(answer), { once: true });
+    $('#modal').showModal();
+    $('#mCancel').onclick = () => $('#modal').close();
+    $('#mOk').onclick = () => { answer = true; $('#modal').close(); };
+  });
+}
+
+$('#updCheck').addEventListener('click', checkUpdates);
+$('#updBody').addEventListener('click', async (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.id === 'updDownload') {
+    b.disabled = true; S.updError = '';
+    try { await api('/api/update/download'); } catch (err) { S.updError = err.message; }
+    return loadUpdates();
+  }
+  if (b.id === 'updInstall') {
+    if (!(await confirmInstall(S.upd.release.latest))) return;
+    b.disabled = true;
+    try { await api('/api/update/install'); toast('Closing Shimmy. The installer is opening.'); } catch (err) { S.updError = err.message; b.disabled = false; renderUpdates(); }
+  }
+});
+
 // ---------- Startup & log ----------
 
 const HINTS = [[/spotify/i, 'Music app: open it when you want it'], [/roblox/i, 'Game launcher'], [/mega/i, 'Cloud sync: keep if you rely on it'], [/screenrec/i, 'Screen recorder'], [/acrobat/i, 'Adobe sync helper: rarely needed'], [/edge/i, 'Edge pre-launch: pure background load'], [/securityhealth/i, 'Windows security icon: leave on'], [/seagull/i, 'Printer drivers: leave on if you use that printer']];
@@ -1358,6 +1488,7 @@ function setTab(t) {
   if (t === 'battery') loadBattery();
   if (t === 'gpu') { requestAnimationFrame(drawGpuChart); loadGpuPage(); }
   if (t === 'settings') loadSettings();
+  if (t === 'updates') loadUpdates();
   watchReveals();
 }
 
@@ -1535,7 +1666,7 @@ async function refresh() {
     S.cpuHist.push([S.state.at, S.state.cpu.loadPct, S.state.cpu.tempC]);
     $('#dot').className = 'ok';
     $('#updated').textContent = 'Live, ' + new Date(S.state.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    renderHome(); renderHero(); renderMap(); renderRecs(); renderApps(); drawChart();
+    renderHome(); renderHero(); renderMap(); renderRecs(); renderApps(); drawChart(); setUpdMark();
     if (S.tab === 'cpu') { renderCpu(); loadGpu(); }
     if (S.tab === 'storage') loadStorage();
     if (S.tab === 'clean') loadClean();

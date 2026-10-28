@@ -105,8 +105,10 @@ models, Shimmy warns you once before its first firmware change and changes nothi
 - **Nothing destructive without a gate.** Closing processes, deleting files and deleting folders each go through one
   unit-tested check. Deletes go to the Recycle Bin by default, and anything too big for the bin asks you a second time.
 - **Everything is logged.** Every close, clean, delete, fan change and charge-limit write is written to a CSV log.
-- **No network, no server.** The UI talks to the Rust core over Tauri IPC with a capability allow-list. Nothing is
-  uploaded anywhere.
+- **No server, and almost no network.** The UI talks to the Rust core over Tauri IPC with a capability allow-list, and
+  the window itself cannot reach the network. The only network use is Shimmy reading GitHub's public release info and
+  downloading the installer when you update; the daily check can be turned off in Settings. The installer's SHA-256 is
+  checked before it runs, and nothing is ever uploaded.
 - **Light when idle.** The window and its WebView are destroyed when you close it, so Shimmy uses about 30 MB in the tray.
 - **Tested against reality.** Rust unit tests, a parity test against the app's previous version on a real 293-process
   snapshot, and read-only checks that run on the actual laptop.

@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Shimmy Optimizer",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "identifier": "com.shimmy.optimizer",
   "build": {
     "frontendDist": "../src",

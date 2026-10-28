@@ -17,6 +17,7 @@ pub mod startup;
 pub mod store;
 pub mod system;
 pub mod tray;
+pub mod update;
 
 use procs::{build_groups, classify, recommend, Marks};
 use serde_json::{json, Value};
@@ -43,6 +44,10 @@ pub struct Shared {
   /// Opened on first use, only when the CPU page asks for the GPU.
   nvml: Mutex<Option<Result<nvml_wrapper::Nvml, String>>>,
   base_mhz: Option<f64>,
+  /// Which logical processors share a core, read once at start.
+  topology: cpu::Topology,
+  /// Busy % and effective clocks, written only by the sampler (every 3 s) so the window is always the same length.
+  cpu_live: Mutex<cpu::Live>,
   /// The laptop's model from the BIOS, and whether the ASUS firmware writes were tested on it (asus.rs).
   model: String,
   model_tested: bool,
@@ -72,6 +77,14 @@ pub struct Shared {
   battery_report: Mutex<Option<(u64, battery::Report)>>,
   /// When making the report last failed, so a failing powercfg is not re-run (and re-reported) every 5 s.
   battery_report_failed: Mutex<u64>,
+  /// The last check's answer, for the Updates page and the download (the page never supplies a URL).
+  update_info: Mutex<Option<update::Release>>,
+  update_dl: jobs::Slot<update::Downloaded>,
+  /// Bytes of the installer downloaded so far and in all.
+  update_done: AtomicU64,
+  update_total: AtomicU64,
+  /// One check at a time, whether it came from the button or the daily timer.
+  update_busy: AtomicBool,
   settings: Mutex<Settings>,
   settings_path: PathBuf,
 }
@@ -91,6 +104,8 @@ struct Settings {
   caches: caches::CachePrefs,
   /// Heat protection: CPU boost off while the processor is hot (heat.rs).
   heat: heat::HeatPrefs,
+  /// The daily check for a new version (update.rs).
+  updates: auto::UpdatePrefs,
   /// The user accepted the warning that ASUS firmware writes were not tested on this model. Kept by Shimmy.
   asus_untested_ok: bool,
   /// Per-app marks by lower-case exe name (procs.rs). Changed only by `set_app_mark`; kept by Shimmy.
@@ -256,6 +271,7 @@ impl Shared {
     *self.nvml.lock().unwrap() = None;
     *self.gpu_counters.lock().unwrap() = None;
     {
+      // Only the processor list is wanted back (list_procs divides by it); nothing reads this System's usage.
       let mut sys = self.sys.lock().unwrap();
       *sys = System::new();
       sys.refresh_cpu_all();
@@ -402,23 +418,26 @@ async fn get_state(s: State<'_, Shr>) -> Result<Value, String> {
     let groups = build_groups(&procs_now, &own, &marks);
     let mem = system::mem_now();
     let recs = recommend(&procs_now, &groups, &mem);
-    let home = system::home(&mut sys);
-    let loads: Vec<f32> = sys.cpus().iter().map(|c| c.cpu_usage()).collect();
+    let live = s.cpu_live.lock().unwrap().clone();
+    let home = system::home(live.total);
     let name = sys.cpus().first().map(|c| c.brand().trim().to_string()).unwrap_or_default();
     drop(sys);
     let (rows, err) = s.readings();
-    let cpu = cpu::build(name, &loads, home.cpu_pct, s.base_mhz, rows.as_deref(), s.fans(), err);
+    let cpu = cpu::build(name, &s.topology, &live, s.base_mhz, rows.as_deref(), s.fans(), err);
     let battery_health = {
       let report = s.battery_report.lock().unwrap();
       battery::health(rows.as_deref(), report.as_ref().map(|(_, r)| r)).map(f64::round)
     };
-    let plugged = s.settings.lock().unwrap().plugged.clone();
+    let (plugged, update_available) = {
+      let st = s.settings.lock().unwrap();
+      (st.plugged.clone(), update::pending(&st.updates.latest_seen))
+    };
     // Shimmy itself: this process, its window engine and the sensor sidecar.
     let self_mb = mb_of(procs_now.iter().filter(|p| own.contains(&p.pid)).map(|p| p.ws as i64).sum());
     let heat = s.settings.lock().unwrap().heat.clone();
     let heat = json!({ "enabled": heat.enabled, "boostOff": heat.saved.is_some(), "since": heat.saved.map(|b| b.since), "hotC": heat::HOT_C, "coolC": heat::COOL_C });
     let fan_mode = s.atk.as_ref().and_then(|a| a.fan_mode());
-    json!({ "mem": mem, "groups": groups, "marks": marks, "recs": recs, "home": home, "cpu": cpu, "batteryHealth": battery_health, "plugged": plugged, "selfMB": self_mb, "fanMode": fan_mode, "heat": heat, "at": store::now_ms() })
+    json!({ "mem": mem, "groups": groups, "marks": marks, "recs": recs, "home": home, "cpu": cpu, "batteryHealth": battery_health, "plugged": plugged, "selfMB": self_mb, "fanMode": fan_mode, "heat": heat, "updateAvailable": update_available, "at": store::now_ms() })
   })
   .await
   .map_err(|e| e.to_string())
@@ -832,7 +851,7 @@ async fn get_battery(s: State<'_, Shr>) -> Result<Value, String> {
         }
       }
     }
-    let live = system::home(&mut s.sys.lock().unwrap()).battery;
+    let live = system::battery_now();
     let rows = s.readings().0;
     let report = s.battery_report.lock().unwrap().as_ref().map(|(_, r)| r.clone());
     let limit = s.settings.lock().unwrap().charge_limit;
@@ -1070,7 +1089,7 @@ async fn set_settings(s: State<'_, Shr>, settings: Value) -> Result<Value, Strin
   let s = s.inner().clone();
   tauri::async_runtime::spawn_blocking(move || {
     let mut new: Settings = serde_json::from_value(settings).map_err(|e| format!("Settings not understood: {e}"))?;
-    auto::clamp(&mut new.alerts, &mut new.auto_clean, &mut new.weekly, &mut new.finder);
+    auto::clamp(&mut new.alerts, &mut new.auto_clean, &mut new.weekly, &mut new.finder, &mut new.updates);
     new.caches.age_days = new.caches.age_days.clamp(1, 365);
     for r in &new.finder.extra_roots {
       check_root(Path::new(r))?;
@@ -1084,6 +1103,7 @@ async fn set_settings(s: State<'_, Shr>, settings: Value) -> Result<Value, Strin
       new.asus_untested_ok = cur.asus_untested_ok;
       new.app_marks = cur.app_marks.clone();
       new.weekly.last_run = cur.weekly.last_run;
+      new.updates = auto::UpdatePrefs { auto_check: new.updates.auto_check, ..cur.updates.clone() };
       // Turning the weekly clean on, or moving it, counts from now, so a slot already in the past does not fire at once.
       let w = &new.weekly;
       if w.enabled && (!cur.weekly.enabled || w.day != cur.weekly.day || w.hour != cur.weekly.hour) {
@@ -1145,6 +1165,128 @@ async fn set_autostart(app: AppHandle, s: State<'_, Shr>, on: bool) -> Result<Va
     autostart::set(on)?;
     s.store.log(if on { "autostart-on" } else { "autostart-off" }, autostart::TASK, "Task Scheduler task at sign-in, highest privileges, starts in the tray");
     Ok(json!({ "on": autostart::enabled() }))
+  })
+  .await
+  .map_err(|e| e.to_string())?
+}
+
+// ---------- Updates ----------
+
+fn update_json(s: &Shared) -> Value {
+  let st = s.settings.lock().unwrap().updates.clone();
+  json!({
+    "current": update::CURRENT,
+    "release": *s.update_info.lock().unwrap(),
+    "download": job_json(&s.update_dl),
+    "bytes": s.update_done.load(Ordering::Relaxed),
+    "total": s.update_total.load(Ordering::Relaxed),
+    "autoCheck": st.auto_check,
+    "lastCheck": st.last_check,
+  })
+}
+
+/// Asks GitHub for the latest release and keeps the answer: for the Updates page, and in settings the newest version
+/// seen, which the rail marker reads. A failed check changes nothing, so the daily timer keeps trying.
+fn check_update_impl(s: &Shared) -> Result<update::Release, String> {
+  let rel = update::check()?;
+  *s.update_info.lock().unwrap() = Some(rel.clone());
+  {
+    let mut st = s.settings.lock().unwrap();
+    st.updates.last_check = store::now_ms();
+    st.updates.latest_seen = rel.latest.clone();
+  }
+  s.save_settings();
+  Ok(rel)
+}
+
+#[tauri::command]
+fn get_update(s: State<'_, Shr>) -> Value {
+  update_json(&s)
+}
+
+#[tauri::command]
+async fn check_update(s: State<'_, Shr>) -> Result<Value, String> {
+  let s = s.inner().clone();
+  tauri::async_runtime::spawn_blocking(move || {
+    if s.update_busy.swap(true, Ordering::SeqCst) {
+      return Err("Shimmy is already checking.".to_string());
+    }
+    let r = check_update_impl(&s);
+    s.update_busy.store(false, Ordering::SeqCst);
+    r.map(|_| update_json(&s))
+  })
+  .await
+  .map_err(|e| e.to_string())?
+}
+
+/// The daily check: one notification per new version. A failure is retried in an hour and is not logged or shown.
+fn auto_update_check(app: &AppHandle, s: &Shared) {
+  match check_update_impl(s) {
+    Ok(rel) => {
+      if auto::update_notify_due(&s.settings.lock().unwrap().updates, &rel.latest, rel.newer) {
+        notify(app, &format!("Shimmy {} is available", rel.latest), "Open Shimmy and go to Updates to see what is new and install it.");
+        s.settings.lock().unwrap().updates.last_notified = rel.latest;
+        s.save_settings();
+        let _ = app.emit("refresh", ());
+      }
+    }
+    Err(_) => {
+      s.settings.lock().unwrap().updates.last_check = auto::update_retry_stamp(store::now_ms());
+      s.save_settings();
+    }
+  }
+}
+
+/// Downloads the installer for the release the last check found, as a background job; the page polls `get_update`.
+#[tauri::command]
+fn start_update_download(s: State<'_, Shr>) -> Result<bool, String> {
+  let rel = s.update_info.lock().unwrap().clone().ok_or("Check for updates first.")?;
+  if !rel.newer {
+    return Err("You already have the newest version.".into());
+  }
+  if let Some(why) = &rel.problem {
+    return Err(why.clone());
+  }
+  {
+    let mut j = s.update_dl.lock().unwrap();
+    if !j.running {
+      j.result = None;
+    }
+  }
+  let s2 = s.inner().clone();
+  Ok(jobs::start(&s.update_dl, move |progress| {
+    progress.set("Downloading");
+    let r = update::download(&rel, &s2.update_done, &s2.update_total);
+    let target = format!("Shimmy {}", rel.latest);
+    match &r {
+      Ok(d) => s2.store.log("update-download", &target, &format!("{} MB, SHA-256 matched, saved to {}", d.bytes / 1_048_576, d.path.display())),
+      Err(e) => s2.store.log("update-download", &target, &format!("not installed: {e}")),
+    }
+    r
+  }))
+}
+
+/// Starts the downloaded installer and quits Shimmy the way the tray's Exit does. The installer is only started if its
+/// hash still matches.
+#[tauri::command]
+async fn install_update(app: AppHandle, s: State<'_, Shr>) -> Result<Value, String> {
+  if app.config().identifier.ends_with(".dev") {
+    return Err("Updates can only be installed from the real Shimmy, not a development build.".into());
+  }
+  let s = s.inner().clone();
+  tauri::async_runtime::spawn_blocking(move || {
+    if s.busy.load(Ordering::SeqCst) {
+      return Err("A clean-up is still running. Install the update when it has finished.".to_string());
+    }
+    let d = s.update_dl.lock().unwrap().result.clone().ok_or("Download the update first.")?;
+    update::install(&d)?;
+    s.store.log("update-install", &format!("Shimmy {}", d.version), &format!("started {}; Shimmy exits so the installer can replace it", d.path.display()));
+    // Let the page get the answer before the window goes.
+    std::thread::spawn(move || {
+      std::thread::sleep(Duration::from_millis(500));
+      exit_app(&app);
+    });
+    Ok(json!({ "ok": true }))
   })
   .await
   .map_err(|e| e.to_string())?
@@ -1227,6 +1369,14 @@ fn update_tray(app: &AppHandle, last: &AtomicU64) {
   let _ = app.state::<TrayStatus>().0.set_text(text);
 }
 
+/// Exit from the tray, and after an update starts its installer: puts heat protection's boost back, saves, quits.
+fn exit_app(app: &AppHandle) {
+  let s = app.state::<Shr>();
+  s.restore_boost("Shimmy exited");
+  s.store.save();
+  app.exit(0);
+}
+
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
   let status = MenuItem::with_id(app, "status", "RAM", false, None::<&str>)?;
   let shared = app.state::<Shr>();
@@ -1267,12 +1417,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         });
       }
       "open" => show_main(app),
-      "exit" => {
-        let s = app.state::<Shr>();
-        s.restore_boost("Shimmy exited");
-        s.store.save();
-        app.exit(0);
-      }
+      "exit" => exit_app(app),
       _ => {}
     })
     .on_tray_icon_event(|tray, e| {
@@ -1325,6 +1470,14 @@ fn automation(app: &AppHandle, s: &Shr, tick: u64) {
     tray_clean(app.clone(), c.level != "clean", true);
   }
   drop(w);
+  // The daily update check runs on its own thread: it waits on the network.
+  if tick % 20 == 15 && auto::update_due(&st.updates, now) && !s.update_busy.swap(true, Ordering::SeqCst) {
+    let (app, s) = (app.clone(), s.clone());
+    std::thread::spawn(move || {
+      auto_update_check(&app, &s);
+      s.update_busy.store(false, Ordering::SeqCst);
+    });
+  }
   if tick % 20 == 10 && !st.weekly.cats.is_empty() && auto::weekly_due(&st.weekly, now, &auto::local_now()) && !s.clean_run.lock().unwrap().running {
     s.settings.lock().unwrap().weekly.last_run = now;
     s.save_settings();
@@ -1336,6 +1489,11 @@ fn automation(app: &AppHandle, s: &Shr, tick: u64) {
 fn start_sampler(app: AppHandle) {
   std::thread::spawn(move || {
     let last = AtomicU64::new(u64::MAX);
+    // The one System whose processor usage is ever refreshed, and the one query for effective clocks.
+    let mut cpu_sys = System::new();
+    cpu_sys.refresh_cpu_all();
+    let mut perf = cpu::Perf::open().ok();
+    std::thread::sleep(Duration::from_millis(500));
     for tick in 0u64.. {
       update_tray(&app, &last);
       let s = app.state::<Shr>();
@@ -1344,13 +1502,15 @@ fn start_sampler(app: AppHandle) {
       if tick % 600 == 0 {
         s.reapply_charge_limit();
       }
+      cpu_sys.refresh_cpu_usage();
+      {
+        let clocks = perf.as_mut().map(|p| p.sample()).unwrap_or_default();
+        let mut live = s.cpu_live.lock().unwrap();
+        *live = cpu::Live { total: cpu_sys.global_cpu_usage(), per_cpu: cpu_sys.cpus().iter().map(|c| c.cpu_usage()).collect(), clocks };
+      }
       if tick % 3 == 0 {
         s.store.sample(system::mem_now().used_mb);
-        let load = {
-          let mut sys = s.sys.lock().unwrap();
-          sys.refresh_cpu_usage();
-          sys.global_cpu_usage()
-        };
+        let load = s.cpu_live.lock().unwrap().total;
         let temp = s.readings().0.and_then(|r| sensors::value(&r, "Cpu", "Temperature", "Core (Tctl/Tdie)"));
         s.store.sample_cpu(load, temp.map(|t| t as f32));
       }
@@ -1390,6 +1550,7 @@ pub fn run() {
       sys.refresh_cpu_all();
       let sensor_state = sensors::SensorState::default();
       let model = asus::model();
+      let topology = cpu::topology().unwrap_or_else(|| cpu::Topology::single_threads(sys.cpus().len()));
       sensors::start(app.path().resource_dir()?.join("sensors").join("shimmy-sensors.exe"), sensor_state.clone());
       app.manage::<Shr>(Arc::new(Shared {
         sys: Mutex::new(sys),
@@ -1399,6 +1560,8 @@ pub fn run() {
         atk: asus::Atk::open(),
         nvml: Mutex::new(None),
         base_mhz: cpu::base_mhz(),
+        topology,
+        cpu_live: Mutex::new(cpu::Live::default()),
         model_tested: asus::is_tested(&model),
         model,
         profile: app.path().home_dir()?,
@@ -1423,6 +1586,11 @@ pub fn run() {
         rest_w: Mutex::new(None),
         battery_report: Mutex::new(None),
         battery_report_failed: Mutex::new(0),
+        update_info: Mutex::new(None),
+        update_dl: Default::default(),
+        update_done: AtomicU64::new(0),
+        update_total: AtomicU64::new(0),
+        update_busy: AtomicBool::new(false),
         settings: Mutex::new(settings),
         settings_path,
       }));
@@ -1444,7 +1612,7 @@ pub fn run() {
         std::thread::spawn(move || s.release());
       }
     })
-    .invoke_handler(tauri::generate_handler![get_state, get_history, get_gpu, get_storage, start_usage_scan, storage_folder, open_path, get_clean, start_clean_scan, start_clean, start_dism, start_finder, finder_delete, get_battery, set_charge_limit, set_fan_mode, set_heat_protection, get_settings, set_settings, set_app_mark, set_autostart, set_plugged_mode, start_cache_scan, start_cache_clean, folder_preview, folder_delete, empty_bin, set_hibernation, get_restore_points, open_apps_settings, get_log, get_startup, toggle_startup, close_procs, trim, quick_clean])
+    .invoke_handler(tauri::generate_handler![get_state, get_history, get_gpu, get_storage, start_usage_scan, storage_folder, open_path, get_clean, start_clean_scan, start_clean, start_dism, start_finder, finder_delete, get_battery, set_charge_limit, set_fan_mode, set_heat_protection, get_settings, set_settings, set_app_mark, set_autostart, set_plugged_mode, start_cache_scan, start_cache_clean, folder_preview, folder_delete, empty_bin, set_hibernation, get_restore_points, open_apps_settings, get_log, get_startup, toggle_startup, close_procs, trim, quick_clean, get_update, check_update, start_update_download, install_update])
     .build(tauri::generate_context!())
     .expect("error while running Shimmy Optimizer")
     .run(|_app, e| {

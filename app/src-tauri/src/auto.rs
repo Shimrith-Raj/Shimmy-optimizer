@@ -77,8 +77,47 @@ impl Default for FinderPrefs {
   }
 }
 
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(rename_all = "camelCase", default)]
+pub struct UpdatePrefs {
+  /// Look for a new version once a day. It reads GitHub's public release info and uploads nothing.
+  pub auto_check: bool,
+  /// Kept by Shimmy, not editable from the page: when the last daily check ran (ms), the newest version it saw, and
+  /// the version it already announced.
+  pub last_check: u64,
+  pub latest_seen: String,
+  pub last_notified: String,
+}
+
+impl Default for UpdatePrefs {
+  fn default() -> Self {
+    UpdatePrefs { auto_check: true, last_check: 0, latest_seen: String::new(), last_notified: String::new() }
+  }
+}
+
+const DAY_MS: u64 = 86_400_000;
+
+/// True when the daily check is on and none has run in the last 24 hours.
+pub fn update_due(u: &UpdatePrefs, now_ms: u64) -> bool {
+  u.auto_check && now_ms.saturating_sub(u.last_check) >= DAY_MS
+}
+
+/// When a daily check fails (offline, say), the stamp that makes the next one due in an hour instead of tomorrow.
+pub fn update_retry_stamp(now_ms: u64) -> u64 {
+  now_ms.saturating_sub(DAY_MS - 3_600_000)
+}
+
+/// One notification per new version: only for a version newer than this one that was not announced already.
+pub fn update_notify_due(u: &UpdatePrefs, latest: &str, newer: bool) -> bool {
+  newer && u.last_notified != latest
+}
+
 /// Brings values from the page into sensible ranges.
-pub fn clamp(a: &mut Alerts, c: &mut AutoClean, w: &mut Weekly, f: &mut FinderPrefs) {
+pub fn clamp(a: &mut Alerts, c: &mut AutoClean, w: &mut Weekly, f: &mut FinderPrefs, u: &mut UpdatePrefs) {
+  for v in [&mut u.latest_seen, &mut u.last_notified] {
+    v.retain(|ch| ch.is_ascii_digit() || ch == '.');
+    v.truncate(32);
+  }
   a.ram_pct = a.ram_pct.clamp(50, 99);
   a.cpu_temp_c = a.cpu_temp_c.clamp(60, 105);
   a.disk_free_gb = a.disk_free_gb.clamp(1, 200);
@@ -209,10 +248,34 @@ mod tests {
   }
 
   #[test]
+  fn daily_update_check() {
+    let day = 86_400_000;
+    let mut u = UpdatePrefs::default();
+    assert!(u.auto_check, "on by default");
+    assert!(update_due(&u, day), "never checked");
+    u.last_check = 5 * day;
+    assert!(!update_due(&u, 5 * day + day - 1));
+    assert!(update_due(&u, 6 * day));
+    u.auto_check = false;
+    assert!(!update_due(&u, 100 * day), "off means never");
+    u.auto_check = true;
+    u.last_check = update_retry_stamp(10 * day);
+    assert!(!update_due(&u, 10 * day + 3_599_000));
+    assert!(update_due(&u, 10 * day + 3_600_000), "a failed check is retried in an hour");
+    assert_eq!(update_retry_stamp(1000), 0, "no underflow");
+    u.last_notified = "0.5.1".into();
+    assert!(!update_notify_due(&u, "0.5.1", true), "once per version");
+    assert!(update_notify_due(&u, "0.5.2", true));
+    assert!(!update_notify_due(&u, "0.5.2", false), "never for a version that is not newer");
+  }
+
+  #[test]
   fn clamping() {
     let (mut a, mut c, mut w, mut f) = (Alerts { ram_pct: 5, ..Default::default() }, AutoClean { level: "nuke".into(), for_min: 0, ..Default::default() },
       Weekly { day: 9, cats: vec!["wu".into(), "rm -rf".into()], ..Default::default() }, FinderPrefs { exclusions: vec!["  ".into(), " Taxes ".into()], ..Default::default() });
-    clamp(&mut a, &mut c, &mut w, &mut f);
+    let mut u = UpdatePrefs { latest_seen: "v0.5.1<b>".into(), last_notified: "9".repeat(40), ..Default::default() };
+    clamp(&mut a, &mut c, &mut w, &mut f, &mut u);
+    assert_eq!((u.latest_seen.as_str(), u.last_notified.len()), ("0.5.1", 32));
     assert_eq!((a.ram_pct, c.level.as_str(), c.for_min, w.day), (50, "trim", 1, 6));
     assert_eq!(w.cats, vec!["wu".to_string()]);
     assert_eq!(f.exclusions, vec!["Taxes".to_string()]);
