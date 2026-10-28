@@ -22,6 +22,32 @@ async function api(path, body) {
   }
 }
 
+// ASUS firmware writes on a laptop model they were not tested on: the first one asks for the user's OK.
+const UNTESTED = 'UNTESTED_MODEL:';
+async function asusApi(path, body) {
+  try {
+    return await api(path, body);
+  } catch (e) {
+    if (!e.message.startsWith(UNTESTED)) throw e;
+    if (!(await confirmUntested(e.message.slice(UNTESTED.length)))) return null;
+    return api(path, { ...body, confirmed: true });
+  }
+}
+
+function confirmUntested(model) {
+  return new Promise((resolve) => {
+    $('#modalBody').innerHTML = `<h3>Not tested on this laptop</h3>
+      <div class="muted">Shimmy's fan modes and battery charge limit write settings to the ASUS firmware. They were built and tested on the ASUS Vivobook M3500QC only. This laptop is ${model ? esc(model) : 'a different model'}, and its firmware may read the same values differently.</div>
+      <div class="muted">If you continue, Shimmy will make the change and won't ask again on this laptop. You can always put things back from MyASUS or with Fn+F.</div>
+      <div class="modal-actions"><button class="btn ghost" id="mCancel">Cancel</button><button class="btn danger" id="mOk">I understand, continue</button></div>`;
+    let answer = false;
+    $('#modal').addEventListener('close', () => resolve(answer), { once: true });
+    $('#modal').showModal();
+    $('#mCancel').onclick = () => $('#modal').close();
+    $('#mOk').onclick = () => { answer = true; $('#modal').close(); };
+  });
+}
+
 function toast(msg, err) {
   const t = document.createElement('div');
   t.className = 'toast' + (err ? ' err' : '');
@@ -884,8 +910,7 @@ function renderCare(b, hold) {
 
 async function setLimit(pct) {
   try {
-    await api('/api/charge-limit', { pct });
-    toast(`Battery will stop charging at ${pct}%.`);
+    if (await asusApi('/api/charge-limit', { pct })) toast(`Battery will stop charging at ${pct}%.`);
   } catch (e) { toast(e.message, true); }
   loadBattery();
 }
@@ -1313,9 +1338,11 @@ document.addEventListener('click', async (e) => {
   if (fanBtn) {
     fanBtn.disabled = true;
     try {
-      const r = await api('/api/fan', { mode: fanBtn.dataset.fan });
-      S.state.fanMode = r.mode;
-      toast(`Fan mode: ${FAN_MODES.find((m) => m[0] === r.mode)?.[1] || r.mode}.`);
+      const r = await asusApi('/api/fan', { mode: fanBtn.dataset.fan });
+      if (r) {
+        S.state.fanMode = r.mode;
+        toast(`Fan mode: ${FAN_MODES.find((m) => m[0] === r.mode)?.[1] || r.mode}.`);
+      }
     } catch (err) { toast(err.message, true); }
     return renderFan();
   }
@@ -1401,8 +1428,8 @@ document.addEventListener('change', async (e) => {
   if (e.target.dataset && 'hold' in e.target.dataset) {
     e.target.disabled = true;
     try {
-      const r = await api('/api/plugged', { on: e.target.checked });
-      toast(r.on ? `Running from the charger. The battery stays at ${r.limit}% while plugged in.` : `Charging normally again, up to ${r.limit}%.`);
+      const r = await asusApi('/api/plugged', { on: e.target.checked });
+      if (r) toast(r.on ? `Running from the charger. The battery stays at ${r.limit}% while plugged in.` : `Charging normally again, up to ${r.limit}%.`);
     } catch (err) { toast(err.message, true); }
     return loadBattery();
   }

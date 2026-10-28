@@ -1,6 +1,6 @@
 [package]
 name = "shimmy-optimizer"
-version = "0.4.1"
+version = "0.4.2"
 description = "Shimmy Optimizer"
 authors = ["Shimrith Raj"]
 license = "MIT"

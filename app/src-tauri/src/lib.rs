@@ -43,6 +43,9 @@ pub struct Shared {
   /// Opened on first use, only when the CPU page asks for the GPU.
   nvml: Mutex<Option<Result<nvml_wrapper::Nvml, String>>>,
   base_mhz: Option<f64>,
+  /// The laptop's model from the BIOS, and whether the ASUS firmware writes were tested on it (asus.rs).
+  model: String,
+  model_tested: bool,
   profile: PathBuf,
   /// The finder's standard folders: Downloads, Desktop, Documents, Videos, Pictures.
   default_roots: Vec<PathBuf>,
@@ -88,7 +91,12 @@ struct Settings {
   caches: caches::CachePrefs,
   /// Heat protection: CPU boost off while the processor is hot (heat.rs).
   heat: heat::HeatPrefs,
+  /// The user accepted the warning that ASUS firmware writes were not tested on this model. Kept by Shimmy.
+  asus_untested_ok: bool,
 }
+
+/// Starts the error a firmware write returns on an untested model before the user's OK; the page shows the warning.
+const UNTESTED: &str = "UNTESTED_MODEL:";
 
 impl Shared {
   /// Fresh sensor readings, or None when the sidecar is not delivering (not elevated, driver missing).
@@ -117,6 +125,21 @@ impl Shared {
     if let Some(limit) = limit {
       let _ = self.write_limit(limit);
     }
+  }
+
+  /// ASUS firmware writes on a model they were not tested on need the user's OK once. `confirmed` is that OK.
+  fn check_model(&self, confirmed: bool) -> Result<(), String> {
+    if self.model_tested || self.settings.lock().unwrap().asus_untested_ok {
+      return Ok(());
+    }
+    if !confirmed {
+      return Err(format!("{UNTESTED}{}", self.model));
+    }
+    self.settings.lock().unwrap().asus_untested_ok = true;
+    self.save_settings();
+    let model = if self.model.is_empty() { "unknown model" } else { &self.model };
+    self.store.log("asus-untested-ok", model, &format!("accepted ASUS firmware controls tested only on the {}", asus::TESTED_MODEL));
+    Ok(())
   }
 
   fn write_limit(&self, pct: u32) -> Result<u32, String> {
@@ -823,13 +846,14 @@ async fn get_battery(s: State<'_, Shr>) -> Result<Value, String> {
 }
 
 #[tauri::command]
-fn set_charge_limit(s: State<'_, Shr>, pct: u32) -> Result<Value, String> {
+fn set_charge_limit(s: State<'_, Shr>, pct: u32, confirmed: Option<bool>) -> Result<Value, String> {
   if !(50..=100).contains(&pct) {
     return Err("The charge limit must be between 50% and 100%.".into());
   }
   if s.settings.lock().unwrap().plugged.on {
     return Err("Turn off Run from the charger first; it sets the limit itself while it is on.".into());
   }
+  s.check_model(confirmed.unwrap_or(false))?;
   let result = s.write_limit(pct)?;
   s.settings.lock().unwrap().charge_limit = Some(pct);
   s.save_settings();
@@ -839,7 +863,7 @@ fn set_charge_limit(s: State<'_, Shr>, pct: u32) -> Result<Value, String> {
 
 /// Turns Run from the charger on (hold at the current charge, never below 40 %) or off (back to the 60/80/100 choice).
 /// Returns the limit written.
-fn plugged_mode_impl(s: &Shared, on: bool) -> Result<u32, String> {
+fn plugged_mode_impl(s: &Shared, on: bool, confirmed: bool) -> Result<u32, String> {
   if !s.limit_supported() {
     return Err("This laptop's firmware does not offer a charge limit, which Run from the charger needs.".into());
   }
@@ -847,6 +871,7 @@ fn plugged_mode_impl(s: &Shared, on: bool) -> Result<u32, String> {
     if !system::battery_now().present {
       return Err("No battery found.".into());
     }
+    s.check_model(confirmed)?;
     let charge = s.battery_reading().ok_or("Shimmy cannot read the battery's charge right now.")?.charge_pct;
     let h = hold::hold_for(charge);
     s.write_limit(h)?;
@@ -873,10 +898,10 @@ fn sync_tray_check(app: &AppHandle, s: &Shared) {
 }
 
 #[tauri::command]
-async fn set_plugged_mode(app: AppHandle, s: State<'_, Shr>, on: bool) -> Result<Value, String> {
+async fn set_plugged_mode(app: AppHandle, s: State<'_, Shr>, on: bool, confirmed: Option<bool>) -> Result<Value, String> {
   let s = s.inner().clone();
   tauri::async_runtime::spawn_blocking(move || {
-    let r = plugged_mode_impl(&s, on);
+    let r = plugged_mode_impl(&s, on, confirmed.unwrap_or(false));
     sync_tray_check(&app, &s);
     let limit = r?;
     Ok(json!({ "on": on, "limit": limit }))
@@ -921,11 +946,12 @@ fn plugged_watch(app: &AppHandle, s: &Shared, now: u64) {
 // ---------- Fan mode and heat protection ----------
 
 #[tauri::command]
-async fn set_fan_mode(s: State<'_, Shr>, mode: String) -> Result<Value, String> {
+async fn set_fan_mode(s: State<'_, Shr>, mode: String, confirmed: Option<bool>) -> Result<Value, String> {
   let s = s.inner().clone();
   tauri::async_runtime::spawn_blocking(move || {
     let atk = s.atk.as_ref().ok_or("The ASUS control interface is not available.")?;
     atk.fan_mode().ok_or("This laptop's firmware does not offer fan modes.")?;
+    s.check_model(confirmed.unwrap_or(false))?;
     atk.set_fan_mode(&mode)?;
     s.store.log("fan-mode", &mode, "set from the Processor page");
     Ok(json!({ "mode": atk.fan_mode() }))
@@ -1035,6 +1061,7 @@ async fn set_settings(s: State<'_, Shr>, settings: Value) -> Result<Value, Strin
       new.charge_limit = cur.charge_limit;
       new.plugged = cur.plugged.clone();
       new.heat.saved = cur.heat.saved.clone();
+      new.asus_untested_ok = cur.asus_untested_ok;
       new.weekly.last_run = cur.weekly.last_run;
       // Turning the weekly clean on, or moving it, counts from now, so a slot already in the past does not fire at once.
       let w = &new.weekly;
@@ -1171,9 +1198,10 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         let (app, s) = (app.clone(), app.state::<Shr>().inner().clone());
         std::thread::spawn(move || {
           let on = !s.settings.lock().unwrap().plugged.on;
-          match plugged_mode_impl(&s, on) {
+          match plugged_mode_impl(&s, on, false) {
             Ok(limit) if on => notify(&app, "Running from the charger", &format!("The battery stays at {limit}% while plugged in; the charger powers the laptop.")),
             Ok(limit) => notify(&app, "Charging normally again", &format!("Charge limit back to {limit}%.")),
+            Err(e) if e.starts_with(UNTESTED) => notify(&app, "Run from the charger", "Shimmy's ASUS controls were not tested on this laptop model. Turn it on from the Battery page once to read the warning and confirm."),
             Err(e) => notify(&app, "Run from the charger", &e),
           }
           sync_tray_check(&app, &s);
@@ -1303,6 +1331,7 @@ pub fn run() {
       let mut sys = System::new();
       sys.refresh_cpu_all();
       let sensor_state = sensors::SensorState::default();
+      let model = asus::model();
       sensors::start(app.path().resource_dir()?.join("sensors").join("shimmy-sensors.exe"), sensor_state.clone());
       app.manage::<Shr>(Arc::new(Shared {
         sys: Mutex::new(sys),
@@ -1312,6 +1341,8 @@ pub fn run() {
         atk: asus::Atk::open(),
         nvml: Mutex::new(None),
         base_mhz: cpu::base_mhz(),
+        model_tested: asus::is_tested(&model),
+        model,
         profile: app.path().home_dir()?,
         default_roots: [app.path().download_dir(), app.path().desktop_dir(), app.path().document_dir(), app.path().video_dir(), app.path().picture_dir()]
           .into_iter()

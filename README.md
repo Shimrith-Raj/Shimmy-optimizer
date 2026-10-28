@@ -23,7 +23,8 @@ PawnIO is listed separately, so you can remove it there too.
 
 **Works on:** any Windows 10/11 PC for monitoring and cleaning. Fan modes and the battery charge limit appear on ASUS laptops
 whose firmware exposes them, such as many Vivobooks; other PCs simply don't show those controls. GPU readings need an
-NVIDIA card. Built and tested on an ASUS Vivobook M3500QC (Ryzen 7 5800HS, RTX 3050 Laptop, Windows 11).
+NVIDIA card. Built and tested on an ASUS Vivobook M3500QC (Ryzen 7 5800HS, RTX 3050 Laptop, Windows 11). On other ASUS
+models, Shimmy warns you once before its first firmware change and changes nothing unless you confirm.
 
 ---
 

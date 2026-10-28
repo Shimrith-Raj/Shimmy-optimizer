@@ -35,8 +35,9 @@ Every action Shimmy takes is written to its action log so you can see what happe
 3. YOUR RESPONSIBILITY
 
 You are responsible for how you use Shimmy and for keeping backups of anything important. Check what you select before you
-close programs or delete files. The ASUS controls were built and tested on one model (ASUS Vivobook M3500QC). On other
-hardware they may behave differently, and you use them at your own risk.
+close programs or delete files. The ASUS controls were built and tested on one model (ASUS Vivobook M3500QC). On any other
+model, Shimmy shows a warning before the first fan-mode or charge-limit change and writes nothing to the firmware unless
+you confirm. If you confirm, you use these controls on that model at your own risk.
 
 
 4. NO WARRANTY

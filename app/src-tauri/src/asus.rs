@@ -14,6 +14,24 @@ pub const CHARGE_LIMIT: u32 = 0x0012_0057;
 /// The VivoBook fan mode, the one Fn+F cycles. This model has no custom fan curves (PLAN.md, Phase 9).
 pub const FAN_MODE: u32 = 0x0011_0019;
 
+/// The one model the firmware writes (fan mode, charge limit) were tested on. On any other model the first write needs
+/// the user's OK, because another ASUS firmware may read the same values differently.
+pub const TESTED_MODEL: &str = "M3500QC";
+
+/// The laptop's model from the BIOS, for example "Vivobook_ASUSLaptop M3500QC_M3500QC". Empty when Windows does not say.
+pub fn model() -> String {
+  use winreg::{enums::HKEY_LOCAL_MACHINE, RegKey};
+  RegKey::predef(HKEY_LOCAL_MACHINE)
+    .open_subkey(r"HARDWARE\DESCRIPTION\System\BIOS")
+    .and_then(|k| k.get_value::<String, _>("SystemProductName"))
+    .map(|m| m.trim().to_string())
+    .unwrap_or_default()
+}
+
+pub fn is_tested(model: &str) -> bool {
+  model.to_uppercase().contains(TESTED_MODEL)
+}
+
 /// Fan mode names and the firmware's values on this Vivobook, measured in Phase 9 (not G-Helper's ROG order).
 pub const FAN_MODES: [(&str, u32); 3] = [("silent", 1), ("standard", 0), ("performance", 2)];
 
@@ -91,5 +109,16 @@ impl Drop for Atk {
     unsafe {
       let _ = CloseHandle(self.0);
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  #[test]
+  fn tested_model() {
+    assert!(super::is_tested("Vivobook_ASUSLaptop M3500QC_M3500QC"));
+    assert!(super::is_tested("vivobook m3500qc"));
+    assert!(!super::is_tested("Vivobook_ASUSLaptop X1505VA_X1505VA"));
+    assert!(!super::is_tested(""));
   }
 }
