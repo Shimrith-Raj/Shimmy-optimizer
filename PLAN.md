@@ -387,3 +387,23 @@ Script: `tools/phase9-step1.ps1` (45 s full load per setting on 16 threads, 20 s
   confirmed by CPU power: without admin rights the sensor reader returns no temperature, power or clocks.
 - Still to do (needs an elevated run): CPU package watts and clocks per mode, and the clock staying at or below 3.2 GHz with
   boost off.
+
+### Step 1 results, part 2 (run 2026-10-28, elevated, plugged in)
+Same script, run as admin so the sensor reader delivers. Full load on 16 threads, read after about 40 s.
+
+| Setting | CPU package | Tctl | Average core clock | CPU fan |
+|---|---|---|---|---|
+| Idle, Standard | 8.0 W | 69.6 °C | 1011 MHz | 5100 RPM |
+| Fan mode 2 | **45.1 W** | 95.4 °C | 3177 MHz | 6300 RPM |
+| Fan mode 1 | **33.8 W** | 90.0 °C | 2599 MHz | 3500 RPM |
+| Fan mode 0 | **38.1 W** | 91.9 °C | 2753 MHz | 5200 RPM |
+| Mode 0 + boost off | 34.9 W | **84.1 °C** | 2738 MHz | 5100 RPM |
+| Afterwards | Mode back to `0x00030000`, boost back to 2/2 | | | |
+
+- **Confirmed: 1 = Silent, 0 = Standard, 2 = Performance** on this Vivobook (power and fan both rise in that order). The firmware
+  also changes the CPU power limit with the mode, so Silent is itself a cooling step.
+- **Boost off works:** about 8 °C cooler than Standard under the same all-core load, for about 0.5 % less average clock. Under
+  all-core load the clock is already held near base by power, so the speed cost shows mostly in light, few-core work.
+- Under full load Standard reaches about 92 °C and Performance 95 °C (the chip's limit), so heat protection at 90 °C will trigger
+  during long heavy loads. With boost off it settles around 84 °C, above the 75 °C needed to turn boost back on, so boost stays
+  off until the load ends. That is the intended behaviour.
