@@ -370,3 +370,20 @@ Windows' processor settings work on the active plan (Balanced): max processor st
 - Battery page: power section (in/out, CPU, RTX, total), and a one-hour chart from a 1,200-point ring buffer in `Shared`.
 - Settings: the heat protection switch. Log: `fan-mode`, `boost-off`, `boost-on`.
 - Tests; screenshots; installer rebuilt as v0.4.0.
+
+### Step 1 results, part 1 (run 2026-10-28, plugged in, not elevated)
+Script: `tools/phase9-step1.ps1` (45 s full load per setting on 16 threads, 20 s rest between; restores in `finally`).
+
+| Setting | Firmware | CPU fan under load |
+|---|---|---|
+| Fan mode value 2 | DEVS answered 1, reads back `0x00030002` | 5700 RPM |
+| Fan mode value 1 | DEVS answered 1, reads back `0x00030001` | 3400 RPM |
+| Fan mode value 0 | DEVS answered 1, reads back `0x00030000` | 5100 RPM |
+| Boost off (`PERFBOOSTMODE` 0/0) | powercfg took it | 5100 RPM |
+| Afterwards | Mode back to `0x00030000`, boost back to 2/2 (Aggressive) | |
+
+- All three fan modes are accepted and read back, so Shimmy can both set and show the mode.
+- The fan speeds suggest **1 = Silent, 0 = Standard, 2 = Performance** on this Vivobook, not G-Helper's ROG order. Not yet
+  confirmed by CPU power: without admin rights the sensor reader returns no temperature, power or clocks.
+- Still to do (needs an elevated run): CPU package watts and clocks per mode, and the clock staying at or below 3.2 GHz with
+  boost off.
