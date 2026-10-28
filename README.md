@@ -2,6 +2,16 @@
 
 **A fast, honest system companion for Windows laptops: see what your machine is really doing, and fix it in one click.**
 
+<p>
+  <a href="https://github.com/Shimrith-Raj/Shimmy-optimizer/releases/latest/download/Shimmy-Optimizer-Setup.exe"><img alt="Download for Windows" src="https://img.shields.io/badge/Download_for_Windows-Shimmy--Optimizer--Setup.exe-c6f432?style=for-the-badge&logo=windows&logoColor=0a0b0d&labelColor=c6f432&color=0a0b0d"></a>
+  <a href="https://github.com/Shimrith-Raj/Shimmy-optimizer/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/Shimrith-Raj/Shimmy-optimizer?style=for-the-badge&label=latest&color=24282e"></a>
+  <a href="LICENSE"><img alt="MIT licence" src="https://img.shields.io/badge/licence-MIT-24282e?style=for-the-badge"></a>
+</p>
+
+> **Looking for the .exe?** It isn't in the source code. The installer is attached to each
+> [release](https://github.com/Shimrith-Raj/Shimmy-optimizer/releases/latest). The button above always downloads the newest
+> one. See [DOWNLOAD.md](DOWNLOAD.md) for older versions and how to check the file.
+
 Shimmy shows your RAM, CPU, GPU, storage and battery in one place, in plain language. You can clear memory hogs, reclaim disk
 space safely, choose the fan mode, keep the processor cool, and stop wearing out your battery when you're plugged in.
 It's written in Rust with Tauri 2. It sits in the tray using about 30 MB of memory and never deletes anything without asking.

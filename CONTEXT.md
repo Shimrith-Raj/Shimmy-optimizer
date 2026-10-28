@@ -36,6 +36,9 @@ Data lives in `%APPDATA%\com.shimmy.optimizer\`: `settings.json`, `history.json`
 ## Building
 - **Installer:** `cd app` then `CARGO_TARGET_DIR=target-ship npx tauri build` (the Tauri CLI resolves the folder from `src-tauri`, so
   `src-tauri/target-ship` would land in `src-tauri/src-tauri/target-ship`). Output: `src-tauri/target-ship/release/bundle/nsis/Shimmy Optimizer_<version>_x64-setup.exe`, unsigned, per-machine.
+- **Publishing:** installers never go in the repo. Attach the installer to a GitHub release (tag `v<version>`) renamed to
+  exactly `Shimmy-Optimizer-Setup.exe`: the download buttons in `README.md` and `DOWNLOAD.md` link to
+  `releases/latest/download/Shimmy-Optimizer-Setup.exe`, so any other name breaks them.
 - **Dev build:** `SHIMMY_NO_ADMIN=1 CARGO_TARGET_DIR=src-tauri/target-dev npx tauri build --no-bundle --config '{"identifier":"com.shimmy.optimizer.dev"}'`.
   It has no admin manifest and its own data folder, so it runs beside the real Shimmy. It has no CPU temperature, and Start with Windows is refused.
 - **Tests:** in `app/src-tauri`, `SHIMMY_NO_ADMIN=1 CARGO_TARGET_DIR=target-dev cargo test` (33 tests). Real-PC checks: add `--test real_scan -- --ignored`. They read only, except `set_limit`, which
