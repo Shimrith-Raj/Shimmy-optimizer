@@ -123,7 +123,7 @@ hand-drawn canvas. Window: 1200×800 default, minimum 900×600, a custom dark ti
 
 ## Not in scope (unless you ask)
 
-Registry cleaners (they help nothing and can break things), driver updaters, "game boost" modes, macOS/Linux, auto-updates, code signing.
+Registry cleaners (they help nothing and can break things), driver updaters, "game boost" modes, macOS/Linux (Plan v2 considered and dropped, 2026-10-28), silent auto-updates (the Updates page from Phase 10b always asks), code signing.
 
 ## Phase 0 results (run 2026-10-27)
 
