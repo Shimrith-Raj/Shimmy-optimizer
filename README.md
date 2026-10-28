@@ -16,6 +16,8 @@ Shimmy shows your RAM, CPU, GPU, storage and battery in one place, in plain lang
 space safely, choose the fan mode, keep the processor cool, and stop wearing out your battery when you're plugged in.
 It's written in Rust with Tauri 2. It sits in the tray using about 30 MB of memory and never deletes anything without asking.
 
+<img src="docs/screenshots/home.png" alt="Shimmy Optimizer home screen: memory, processor temperature, free disk space and battery at a glance">
+
 ## ⬇️ Install
 
 **[Download Shimmy-Optimizer-Setup.exe](https://github.com/Shimrith-Raj/Shimmy-optimizer/releases/latest/download/Shimmy-Optimizer-Setup.exe)**
@@ -45,6 +47,11 @@ models, Shimmy warns you once before its first firmware change and changes nothi
 - Suggestions on what is safe to close and how much it frees, with protected system and work apps never touched
 - **Clean now** and **Trim** from the window or the tray, plus an optional automatic clean when memory stays full
 
+<table><tr>
+<td width="50%"><img src="docs/screenshots/memory.png" alt="Memory map: each cell is a slice of RAM, coloured by the app holding it"></td>
+<td width="50%"><img src="docs/screenshots/apps.png" alt="Every app in memory, grouped, with protected apps marked and a Close button for the rest"></td>
+</tr></table>
+
 ### 🔥 Processor
 - Real temperature, per-core clocks and power, through LibreHardwareMonitor
 - **Fan modes:** Silent / Standard / Performance, the same ASUS modes as Fn+F, with the live fan speed
@@ -53,15 +60,24 @@ models, Shimmy warns you once before its first firmware change and changes nothi
   setting is always put back.
 - Throttling detection in plain words ("Running at 2.1 GHz while busy, below its rated 3.2 GHz")
 
+<img src="docs/screenshots/processor.png" alt="Processor page: live temperature, load, clock, power and fan speed, with heat protection">
+
 ### 🎮 Graphics
 - RTX temperature, load, VRAM and power through NVML, read **only while you're looking**, so the dedicated GPU can sleep
 - Per-app GPU use across both chips, the same numbers as Task Manager
+
+<img src="docs/screenshots/graphics.png" alt="Graphics page: RTX 3050 temperature, load, clock, power and video memory">
 
 ### 💾 Storage and Clean
 - What fills C:, folder by folder, with safe deletes to the Recycle Bin
 - Old caches (CapCut, Premiere, Telegram, Spotify, Discord, npm, pip, Cargo…) found by age, never while the app is open
 - Big and duplicate file finder (BLAKE3 hashing) that skips code projects, hidden files and anything on your Keep list
 - Temp files, Windows Update leftovers, browser caches (never history or passwords), DISM component cleanup
+
+<table><tr>
+<td width="50%"><img src="docs/screenshots/storage.png" alt="Storage page: free space, SSD health and what fills drive C:"></td>
+<td width="50%"><img src="docs/screenshots/clean.png" alt="Clean page: temporary files and caches, each with its size and a plain explanation"></td>
+</tr></table>
 
 ### 🔋 Battery
 - Health, charge cycles and a capacity-over-time chart from Windows' own battery report
@@ -71,9 +87,16 @@ models, Shimmy warns you once before its first firmware change and changes nothi
 - **Live power:** watts in and out of the battery, CPU and RTX watts, the whole laptop's draw, and a one-hour chart that
   shows when the battery had to help the charger
 
+<img src="docs/screenshots/battery.png" alt="Battery page: health, charge cycles, capacity and live power draw">
+
 ### ⚙️ Everything else
 - Startup apps on or off (including all-users entries), a full action log you can audit, alerts for memory, heat, disk
   and battery, a weekly automatic clean, and Start with Windows straight into the tray
+
+<table><tr>
+<td width="50%"><img src="docs/screenshots/log.png" alt="Log page: every action Shimmy has taken, with time, target and detail"></td>
+<td width="50%"><img src="docs/screenshots/settings.png" alt="Settings page: alert thresholds and the automatic memory clean"></td>
+</tr></table>
 
 ---
 
