@@ -7,6 +7,7 @@ pub mod clean;
 pub mod cpu;
 pub mod finder;
 pub mod gpu;
+pub mod heat;
 pub mod hold;
 pub mod jobs;
 pub mod procs;
@@ -21,7 +22,7 @@ use procs::{build_groups, classify, recommend};
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use store::Store;
@@ -49,6 +50,13 @@ pub struct Shared {
   gpu_counters: Mutex<Option<Result<gpu::Counters, String>>>,
   watch: Mutex<auto::Watch>,
   hold_watch: Mutex<hold::Watch>,
+  heat_watch: Mutex<heat::Watch>,
+  /// Only the first failure to turn boost off is logged, so a refusing powercfg does not fill the log every 30 s.
+  heat_failed: AtomicBool,
+  /// The last hour of battery and processor watts, sampled every 3 s, in memory only.
+  power_hist: Mutex<VecDeque<battery::PowerPoint>>,
+  /// What the rest of the laptop draws, learned on battery; used to estimate the total on the charger.
+  rest_w: Mutex<Option<f64>>,
   usage: jobs::Slot<storage::Usage>,
   tree: Mutex<Option<storage::Tree>>,
   clean_scan: jobs::Slot<Vec<clean::CatScan>>,
@@ -78,6 +86,8 @@ struct Settings {
   plugged: hold::PluggedMode,
   /// Old caches on the Storage page.
   caches: caches::CachePrefs,
+  /// Heat protection: CPU boost off while the processor is hot (heat.rs).
+  heat: heat::HeatPrefs,
 }
 
 impl Shared {
@@ -128,8 +138,61 @@ impl Shared {
     Some(hold::Reading {
       plugged: live.plugged,
       charge_pct: v("Level", "Charge Level").or(live.pct.map(f64::from))?,
-      rate_w: v("Power", "Charge Rate").or_else(|| v("Power", "Discharge Rate").map(|w| -w)),
+      rate_w: rows.as_deref().and_then(battery::rate),
     })
+  }
+
+  /// One power sample for the Battery page's last-hour chart, and the rest-of-laptop draw learned while on battery.
+  fn sample_power(&self) {
+    let live = system::battery_now();
+    if !live.present {
+      return;
+    }
+    let rows = self.readings().0;
+    let battery_w = rows.as_deref().and_then(battery::rate);
+    let cpu_w = rows.as_deref().and_then(|r| sensors::value(r, "Cpu", "Power", "Package"));
+    if !live.plugged {
+      if let Some(rest) = battery_w.zip(cpu_w).and_then(|(b, c)| battery::rest_of(b, c)) {
+        let mut r = self.rest_w.lock().unwrap();
+        *r = Some(r.map_or(rest, |old| old * 0.9 + rest * 0.1));
+      }
+    }
+    let held = self.settings.lock().unwrap().plugged.on;
+    let mut h = self.power_hist.lock().unwrap();
+    if h.len() >= battery::HIST_POINTS {
+      h.pop_front();
+    }
+    h.push_back(battery::PowerPoint { t: store::now_ms(), battery_w, cpu_w, plugged: live.plugged, held });
+  }
+
+  /// Whether the RTX is awake (Windows' GPU engine counters show it in use) and, only then, its watts from NVML.
+  /// Asking NVML wakes a sleeping RTX, so it is never asked while the card sleeps.
+  fn rtx_power(&self) -> (bool, Option<f64>) {
+    let awake = match self.gpu_counters.lock().unwrap().get_or_insert_with(gpu::Counters::open) {
+      Ok(c) => c.sample(&HashMap::new()).0.iter().any(|a| !a.integrated && a.load_pct >= 1.0),
+      Err(_) => false,
+    };
+    if !awake {
+      return (false, None);
+    }
+    let w = match self.nvml.lock().unwrap().get_or_insert_with(|| nvml_wrapper::Nvml::init().map_err(|e| e.to_string())) {
+      Ok(n) => gpu::nvidia(n).ok().and_then(|g| g.power_w),
+      Err(_) => None,
+    };
+    (true, w)
+  }
+
+  /// Puts CPU boost back if Shimmy turned it off. Used when heat protection is switched off, at Exit and at start-up.
+  fn restore_boost(&self, why: &str) {
+    let Some(saved) = self.settings.lock().unwrap().heat.saved.clone() else { return };
+    match heat::restore(&saved) {
+      Ok(()) => {
+        self.settings.lock().unwrap().heat.saved = None;
+        self.save_settings();
+        self.store.log("boost-on", &format!("AC {}, DC {}", saved.ac, saved.dc), why);
+      }
+      Err(e) => self.store.log("boost-on-failed", &format!("AC {}, DC {}", saved.ac, saved.dc), &e),
+    }
   }
 
   /// The standard folders the user has not turned off, then the ones they added.
@@ -306,7 +369,10 @@ async fn get_state(s: State<'_, Shr>) -> Result<Value, String> {
     let plugged = s.settings.lock().unwrap().plugged.clone();
     // Shimmy itself: this process, its window engine and the sensor sidecar.
     let self_mb = mb_of(procs_now.iter().filter(|p| own.contains(&p.pid)).map(|p| p.ws as i64).sum());
-    json!({ "mem": mem, "groups": groups, "recs": recs, "home": home, "cpu": cpu, "batteryHealth": battery_health, "plugged": plugged, "selfMB": self_mb, "at": store::now_ms() })
+    let heat = s.settings.lock().unwrap().heat.clone();
+    let heat = json!({ "enabled": heat.enabled, "boostOff": heat.saved.is_some(), "since": heat.saved.map(|b| b.since), "hotC": heat::HOT_C, "coolC": heat::COOL_C });
+    let fan_mode = s.atk.as_ref().and_then(|a| a.fan_mode());
+    json!({ "mem": mem, "groups": groups, "recs": recs, "home": home, "cpu": cpu, "batteryHealth": battery_health, "plugged": plugged, "selfMB": self_mb, "fanMode": fan_mode, "heat": heat, "at": store::now_ms() })
   })
   .await
   .map_err(|e| e.to_string())
@@ -732,7 +798,20 @@ async fn get_battery(s: State<'_, Shr>) -> Result<Value, String> {
       "myasus": hold::myasus_limit(),
       "overridden": s.hold_watch.lock().unwrap().override_warned,
     });
-    json!({ "battery": view, "hold": hold, "error": error })
+    let (gpu_awake, gpu_w) = s.rtx_power();
+    let cpu_w = rows.as_deref().and_then(|r| sensors::value(r, "Cpu", "Power", "Package"));
+    let total = battery::total_draw(view.plugged, view.rate_w, cpu_w, gpu_w.unwrap_or(0.0), *s.rest_w.lock().unwrap());
+    let power = json!({
+      "batteryW": view.rate_w,
+      "cpuW": cpu_w,
+      "gpuAwake": gpu_awake,
+      "gpuW": gpu_w,
+      "totalW": total.map(|t| t.0),
+      "totalExact": total.is_some_and(|t| t.1),
+      "draining": view.plugged && view.rate_w.is_some_and(|w| w < -0.5),
+    });
+    let hist: Vec<Value> = s.power_hist.lock().unwrap().iter().map(|p| json!([p.t, p.battery_w, p.cpu_w, p.plugged, p.held])).collect();
+    json!({ "battery": view, "hold": hold, "power": power, "powerHistory": hist, "error": error })
   })
   .await
   .map_err(|e| e.to_string())
@@ -834,6 +913,74 @@ fn plugged_watch(app: &AppHandle, s: &Shared, now: u64) {
   }
 }
 
+// ---------- Fan mode and heat protection ----------
+
+#[tauri::command]
+async fn set_fan_mode(s: State<'_, Shr>, mode: String) -> Result<Value, String> {
+  let s = s.inner().clone();
+  tauri::async_runtime::spawn_blocking(move || {
+    let atk = s.atk.as_ref().ok_or("The ASUS control interface is not available.")?;
+    atk.fan_mode().ok_or("This laptop's firmware does not offer fan modes.")?;
+    atk.set_fan_mode(&mode)?;
+    s.store.log("fan-mode", &mode, "set from the Processor page");
+    Ok(json!({ "mode": atk.fan_mode() }))
+  })
+  .await
+  .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn set_heat_protection(s: State<'_, Shr>, on: bool) -> Result<Value, String> {
+  let s = s.inner().clone();
+  tauri::async_runtime::spawn_blocking(move || {
+    s.settings.lock().unwrap().heat.enabled = on;
+    s.save_settings();
+    if !on {
+      s.restore_boost("heat protection turned off");
+    }
+    *s.heat_watch.lock().unwrap() = heat::Watch::default();
+    Ok(json!({ "on": on }))
+  })
+  .await
+  .map_err(|e| e.to_string())?
+}
+
+/// Heat protection, every 3 s: boost off after 30 s at 90 °C or more, back on after 2 min at 75 °C or less. Quiet: the
+/// Log and the Processor page only.
+fn heat_watch(s: &Shared, now: u64) {
+  let (enabled, boost_off) = {
+    let st = s.settings.lock().unwrap();
+    (st.heat.enabled, st.heat.saved.is_some())
+  };
+  let temp = s.readings().0.and_then(|r| sensors::value(&r, "Cpu", "Temperature", "Core (Tctl/Tdie)"));
+  let action = s.heat_watch.lock().unwrap().step(enabled, boost_off, temp, now);
+  match action {
+    Some(heat::Action::BoostOff) => match heat::boost_off(now) {
+      Ok(saved) => {
+        let what = format!("AC {}, DC {} before", saved.ac, saved.dc);
+        s.settings.lock().unwrap().heat.saved = Some(saved);
+        s.save_settings();
+        s.heat_failed.store(false, Ordering::SeqCst);
+        s.store.log("boost-off", &what, &format!("processor at {:.0} °C for 30 s; boost off until it cools to {:.0} °C", temp.unwrap_or(0.0), heat::COOL_C));
+      }
+      Err(e) => {
+        if !s.heat_failed.swap(true, Ordering::SeqCst) {
+          s.store.log("boost-off-failed", "heat protection", &e);
+        }
+      }
+    },
+    Some(heat::Action::BoostOn) => {
+      let why = match temp {
+        _ if !enabled => "heat protection turned off".to_string(),
+        Some(t) => format!("cooled to {t:.0} °C for 2 min"),
+        None => "no temperature reading for 2 min".to_string(),
+      };
+      s.restore_boost(&why);
+    }
+    None => {}
+  }
+}
+
 // ---------- Settings ----------
 
 fn settings_json(s: &Shared) -> Value {
@@ -882,6 +1029,7 @@ async fn set_settings(s: State<'_, Shr>, settings: Value) -> Result<Value, Strin
       // Kept by Shimmy, not by the page.
       new.charge_limit = cur.charge_limit;
       new.plugged = cur.plugged.clone();
+      new.heat.saved = cur.heat.saved.clone();
       new.weekly.last_run = cur.weekly.last_run;
       // Turning the weekly clean on, or moving it, counts from now, so a slot already in the past does not fire at once.
       let w = &new.weekly;
@@ -1029,7 +1177,9 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
       }
       "open" => show_main(app),
       "exit" => {
-        app.state::<Shr>().store.save();
+        let s = app.state::<Shr>();
+        s.restore_boost("Shimmy exited");
+        s.store.save();
         app.exit(0);
       }
       _ => {}
@@ -1055,6 +1205,7 @@ fn automation(app: &AppHandle, s: &Shr, tick: u64) {
   let st = s.settings.lock().unwrap().clone();
   let m = system::mem_now();
   plugged_watch(app, s, now);
+  heat_watch(s, now);
   let mut w = s.watch.lock().unwrap();
   if st.alerts.enabled {
     let a = &st.alerts;
@@ -1098,6 +1249,7 @@ fn start_sampler(app: AppHandle) {
       update_tray(&app, &last);
       let s = app.state::<Shr>();
       automation(&app, s.inner(), tick);
+      s.sample_power();
       if tick % 600 == 0 {
         s.reapply_charge_limit();
       }
@@ -1171,11 +1323,17 @@ pub fn run() {
         gpu_counters: Mutex::new(None),
         watch: Mutex::new(auto::Watch::default()),
         hold_watch: Mutex::new(hold::Watch::default()),
+        heat_watch: Mutex::new(heat::Watch::default()),
+        heat_failed: AtomicBool::new(false),
+        power_hist: Mutex::new(VecDeque::with_capacity(battery::HIST_POINTS)),
+        rest_w: Mutex::new(None),
         battery_report: Mutex::new(None),
         battery_report_failed: Mutex::new(0),
         settings: Mutex::new(settings),
         settings_path,
       }));
+      // Shimmy was closed (or the PC restarted) while it had boost off: put it back before anything else.
+      app.state::<Shr>().restore_boost("Shimmy was closed while boost was off");
       build_tray(app.handle())?;
       start_sampler(app.handle().clone());
       // The sign-in task starts Shimmy in the tray; any other start opens the window.
@@ -1192,7 +1350,7 @@ pub fn run() {
         std::thread::spawn(move || s.release());
       }
     })
-    .invoke_handler(tauri::generate_handler![get_state, get_history, get_gpu, get_storage, start_usage_scan, storage_folder, open_path, get_clean, start_clean_scan, start_clean, start_dism, start_finder, finder_delete, get_battery, set_charge_limit, get_settings, set_settings, set_autostart, set_plugged_mode, start_cache_scan, start_cache_clean, folder_preview, folder_delete, empty_bin, set_hibernation, get_restore_points, open_apps_settings, get_log, get_startup, toggle_startup, close_procs, trim, quick_clean])
+    .invoke_handler(tauri::generate_handler![get_state, get_history, get_gpu, get_storage, start_usage_scan, storage_folder, open_path, get_clean, start_clean_scan, start_clean, start_dism, start_finder, finder_delete, get_battery, set_charge_limit, set_fan_mode, set_heat_protection, get_settings, set_settings, set_autostart, set_plugged_mode, start_cache_scan, start_cache_clean, folder_preview, folder_delete, empty_bin, set_hibernation, get_restore_points, open_apps_settings, get_log, get_startup, toggle_startup, close_procs, trim, quick_clean])
     .build(tauri::generate_context!())
     .expect("error while running Shimmy Optimizer")
     .run(|_app, e| {

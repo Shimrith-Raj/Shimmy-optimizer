@@ -9,6 +9,49 @@ use std::sync::LazyLock;
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+/// Watts into the battery (positive) or out of it (negative). The sensors report a charge and a discharge rate; when
+/// both are present the net is used, so a stale 0 on one of them cannot hide the other.
+pub fn rate(rows: &[Reading]) -> Option<f64> {
+  let charge = value(rows, "Battery", "Power", "Charge Rate");
+  let discharge = value(rows, "Battery", "Power", "Discharge Rate");
+  match (charge, discharge) {
+    (Some(c), Some(d)) => Some(c - d),
+    (c, d) => c.or(d.map(|w| -w)),
+  }
+}
+
+/// One hour of power samples at the sampler's 3 s.
+pub const HIST_POINTS: usize = 1200;
+
+/// What the rest of the laptop (screen, SSD, Wi-Fi, chipset) is taken to draw before Shimmy has measured it on battery.
+pub const REST_W_GUESS: f64 = 8.0;
+
+#[derive(Clone, Copy, Debug)]
+pub struct PowerPoint {
+  pub t: u64,
+  pub battery_w: Option<f64>,
+  pub cpu_w: Option<f64>,
+  pub plugged: bool,
+  /// Run from the charger was on.
+  pub held: bool,
+}
+
+/// The whole laptop's draw in watts, and whether it is measured (true) or estimated. On battery it is exactly what
+/// leaves the battery. On the charger there is no sensor for the charger's output, so it is the processor, the RTX
+/// (0 while asleep) and the rest of the laptop as last measured on battery.
+pub fn total_draw(plugged: bool, battery_w: Option<f64>, cpu_w: Option<f64>, gpu_w: f64, rest_w: Option<f64>) -> Option<(f64, bool)> {
+  if !plugged {
+    return battery_w.filter(|w| *w < 0.0).map(|w| (-w, true));
+  }
+  cpu_w.map(|c| (c + gpu_w + rest_w.unwrap_or(REST_W_GUESS), false))
+}
+
+/// The rest of the laptop's draw from an on-battery sample: what leaves the battery minus the processor, kept within
+/// sensible bounds.
+pub fn rest_of(battery_w: f64, cpu_w: f64) -> Option<f64> {
+  (battery_w < -0.5).then(|| (-battery_w - cpu_w).clamp(2.0, 40.0))
+}
+
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryPoint {
@@ -159,7 +202,7 @@ pub fn build(live: &crate::system::Battery, rows: Option<&[Reading]>, report: Op
   let design = energy("Designed Capacity").or(report.and_then(|r| r.design_mwh));
   let full = energy("Fully-Charged Capacity").or(report.and_then(|r| r.full_mwh));
   let health = health(Some(rows), report);
-  let rate = value(rows, "Battery", "Power", "Charge Rate").or_else(|| value(rows, "Battery", "Power", "Discharge Rate").map(|w| -w));
+  let rate = rate(rows);
   let cycles = report.and_then(|r| r.cycles);
   BatteryView {
     present: live.present,
@@ -217,5 +260,24 @@ mod tests {
     // The level follows the whole % the text shows.
     assert_eq!(status(Some(79.6), None).level, "good");
     assert_eq!(status(None, None).level, "unknown");
+  }
+
+  fn row(sensor: &str, v: f64) -> Reading {
+    serde_json::from_value(serde_json::json!({ "hw": "ASUS Battery", "type": "Battery", "sensor": sensor, "kind": "Power", "value": v })).unwrap()
+  }
+
+  #[test]
+  fn battery_rate_and_draw() {
+    assert_eq!(rate(&[row("Charge Rate", 52.6)]), Some(52.6));
+    assert_eq!(rate(&[row("Discharge Rate", 12.0)]), Some(-12.0));
+    // A stale 0 charge rate next to a real discharge.
+    assert_eq!(rate(&[row("Charge Rate", 0.0), row("Discharge Rate", 12.0)]), Some(-12.0));
+    assert_eq!(rate(&[]), None);
+    assert_eq!(total_draw(false, Some(-14.0), Some(6.0), 0.0, None), Some((14.0, true)));
+    assert_eq!(total_draw(false, None, Some(6.0), 0.0, None), None);
+    assert_eq!(total_draw(true, Some(0.0), Some(30.0), 20.0, Some(7.0)), Some((57.0, false)));
+    assert_eq!(total_draw(true, Some(0.0), Some(30.0), 0.0, None), Some((38.0, false)));
+    assert_eq!(rest_of(-14.0, 6.0), Some(8.0));
+    assert_eq!(rest_of(3.0, 6.0), None);
   }
 }

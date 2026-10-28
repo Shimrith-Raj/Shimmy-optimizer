@@ -407,3 +407,27 @@ Same script, run as admin so the sensor reader delivers. Full load on 16 threads
 - Under full load Standard reaches about 92 °C and Performance 95 °C (the chip's limit), so heat protection at 90 °C will trigger
   during long heavy loads. With boost off it settles around 84 °C, above the 75 °C needed to turn boost back on, so boost stays
   off until the load ends. That is the intended behaviour.
+
+### Built (2026-10-28, v0.4.0)
+- **Fan modes** (`asus.rs`): `FAN_MODE` `0x00110019`, names mapped to this Vivobook's values (1 Silent, 0 Standard,
+  2 Performance). `set_fan_mode` checks the firmware answers 1 and logs `fan-mode`. The Processor page has a "Fan and heat"
+  section: Silent / Standard / Performance with the measured full-load watts, the live fan speed, and the active mode read
+  from the firmware every refresh (so Fn+F and MyASUS changes show up).
+- **Heat protection** (`heat.rs`, unit-tested): boost off after 30 s at 90 °C or more, back on after 2 min at 75 °C or less;
+  no temperature reading counts as cool, so boost is never left off blind. Boost off saves the plan GUID and its AC/DC
+  values in `settings.json` (`heat.saved`) and writes `PERFBOOSTMODE` 0/0; restoring writes them back to that same plan.
+  Restored when it cools, when the switch is turned off, at tray Exit, and at start-up if Shimmy was closed with boost off.
+  Logged as `boost-off` / `boost-on` (first failure only as `boost-off-failed`). Switch on the Processor page and in
+  Settings, on by default.
+- **Battery power**: `battery::rate` uses the net of the charge and discharge rates (a stale 0 can no longer hide a
+  drain); the hold logic and the page share it. The Battery page has a Power section: battery in/out W, processor W,
+  RTX W (only when Windows' GPU counters show it in use; NVML is never asked while it sleeps), and the whole laptop's
+  draw: measured on battery, estimated on the charger from processor + RTX + the rest of the laptop as last measured on
+  battery (8 W until then). A red note while the battery drains on the charger, saying so plainly when Run from the
+  charger is on. One-hour chart from a 1,200-point ring buffer filled by the 3 s sampler (also in the tray), drain
+  shaded red, hover for values.
+- 33 Rust tests pass (5 new: heat timings, dips, switch-off and lost sensors, powercfg parsing; battery rate and draw).
+  Installer `Shimmy Optimizer_0.4.0_x64-setup.exe`, installed.
+- Checked in the installed app: the Fan and heat section renders, shows Standard from the firmware and the live fan speed.
+  Not yet exercised by hand (Windows blocks automated clicks on an elevated window): switching modes from the page, the
+  heat switch, and the Battery page's Power section.

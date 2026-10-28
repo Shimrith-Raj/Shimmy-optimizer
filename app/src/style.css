@@ -170,6 +170,9 @@ input.tick:disabled { opacity: .35; cursor: not-allowed; }
 
 /* ---------- Battery ---------- */
 #wearChart { width: 100%; height: clamp(220px, 24vw, 320px); display: block; background: var(--s1); }
+#powerChart { width: 100%; height: clamp(200px, 22vw, 300px); display: block; background: var(--s1); margin-top: 4px; }
+#powerFacts { margin-bottom: 4px; }
+.k-drain { background: rgba(255,77,61,.35); height: 12px !important; }
 .limits { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
 .limits button { font: inherit; color: var(--ink); text-align: left; background: var(--s1); border: 0; padding: 22px 24px; cursor: pointer; display: grid; gap: 4px; transition: background-color .15s, transform .12s var(--ease); }
 .limits button:hover { background: var(--s2); }
