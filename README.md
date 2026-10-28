@@ -34,8 +34,8 @@ power. To uninstall, use **Settings → Apps → Installed apps → Shimmy Optim
 PawnIO is listed separately, so you can remove it there too.
 
 **Works on:** any Windows 10/11 PC for monitoring and cleaning. Fan modes and the battery charge limit appear on ASUS laptops
-whose firmware exposes them, such as many Vivobooks; other PCs simply don't show those controls. GPU readings need an
-NVIDIA card. Built and tested on an ASUS Vivobook M3500QC (Ryzen 7 5800HS, RTX 3050 Laptop, Windows 11). On other ASUS
+whose firmware exposes them, such as many Vivobooks; other PCs simply don't show those controls. Graphics readings work
+on AMD, Intel and NVIDIA chips, though what each driver reports varies, and watts are NVIDIA only. Built and tested on an ASUS Vivobook M3500QC (Ryzen 7 5800HS, RTX 3050 Laptop, Windows 11). On other ASUS
 models, Shimmy warns you once before its first firmware change and changes nothing unless you confirm.
 
 ---
@@ -63,8 +63,11 @@ models, Shimmy warns you once before its first firmware change and changes nothi
 <img src="docs/screenshots/processor.png" alt="Processor page: live temperature, load, clock, power and fan speed, with heat protection">
 
 ### 🎮 Graphics
-- RTX temperature, load, VRAM and power through NVML, read **only while you're looking**, so the dedicated GPU can sleep
-- Per-app GPU use across both chips, the same numbers as Task Manager
+- One section per graphics chip, AMD, Intel or NVIDIA: load, temperature, clocks, power, fan and video memory from
+  Windows' own graphics kernel, where the driver reports them (a value it doesn't report shows as unavailable, never 0)
+- NVIDIA cards add watts, P-state, what holds the clock back and the PCIe link through NVML, read **only while you're looking**
+- A sleeping dedicated GPU is left asleep: Shimmy asks it nothing until an app is using it
+- Per-engine and per-app GPU use on every chip, the same numbers as Task Manager
 
 <img src="docs/screenshots/graphics.png" alt="Graphics page: RTX 3050 temperature, load, clock, power and video memory">
 
@@ -84,7 +87,7 @@ models, Shimmy warns you once before its first firmware change and changes nothi
 - **Charge limit** (60 / 80 / 100 %) through the ASUS firmware
 - **Run from the charger:** while you're plugged in the battery neither charges nor drains, so the charger powers the
   laptop and the battery's charge cycles are saved
-- **Live power:** watts in and out of the battery, CPU and RTX watts, the whole laptop's draw, and a one-hour chart that
+- **Live power:** watts in and out of the battery, CPU and NVIDIA GPU watts, the whole laptop's draw, and a one-hour chart that
   shows when the battery had to help the charger
 
 <img src="docs/screenshots/battery.png" alt="Battery page: health, charge cycles, capacity and live power draw">

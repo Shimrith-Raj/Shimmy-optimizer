@@ -284,11 +284,13 @@ dialog[open] { animation: rise .25s var(--ease); }
 .engines .empty { grid-column: 1 / -1; }
 #gpuChart { width: 100%; height: clamp(220px, 26vw, 340px); display: block; background: var(--s1); }
 .key span:last-child:not(:has(i)) { margin-left: auto; }
-.gpu.adapters { grid-template-columns: 1fr 1fr; }
-.adapters div { min-height: 160px; }
-.adapters b small { font-size: .55em; font-weight: 500; margin-left: 2px; }
-.adapters .t { color: var(--ink); font-size: 18px; font-weight: 600; }
-.adapters .on b { color: var(--accent); }
+/* One section per graphics chip on the Graphics page. */
+.gchip + .gchip { margin-top: 64px; }
+.gchip .block-head { margin-bottom: 8px; }
+.gchip > .care-note:first-of-type { margin: 0 0 20px; }
+.gchip .facts, .gchip .engines { margin-bottom: 4px; }
+.gchip .care-note.lvl-warn { color: var(--warn); }
+.gchip .care-note.lvl-bad { color: var(--bad); }
 .facts.four { grid-template-columns: repeat(4, 1fr); }
 .facts.four b { font-size: 22px; }
 
@@ -350,7 +352,6 @@ dialog[open] { animation: rise .25s var(--ease); }
   .gpu { grid-template-columns: 1fr 1fr; }
   .limits { grid-template-columns: 1fr; }
   .facts.four { grid-template-columns: 1fr 1fr; }
-  .gpu.adapters { grid-template-columns: 1fr; }
   .frow { grid-template-columns: 1fr 100px auto; }
   .frow .bar-col { display: none; }
   .frow.file { grid-template-columns: 32px 1fr 100px auto; }

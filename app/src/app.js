@@ -348,13 +348,14 @@ function renderFan() {
 async function loadGpu() {
   try {
     const r = await api('/api/gpu');
-    const g = r.gpu;
-    $('#gpu').innerHTML = g ? [
-      `<div class="gname"><b>${esc(g.name)}</b><span>${g.loadPct != null ? `${g.loadPct}% busy` : ''}</span></div>`,
-      `<div><b>${g.tempC ?? '–'}${g.tempC != null ? ' °C' : ''}</b><span>Temperature</span></div>`,
-      `<div><b>${g.vramUsedMb != null ? fmt(g.vramUsedMb) : '–'}</b><span>${g.vramTotalMb ? `of ${fmt(g.vramTotalMb)} video memory` : 'Video memory'}</span></div>`,
-      `<div><b>${g.powerW != null ? g.powerW.toFixed(1) + ' W' : '–'}</b><span>Power draw</span></div>`,
-    ].join('') : `<div class="none"><b>No NVIDIA graphics found</b><span>${esc(r.error || '')}</span></div>`;
+    const a = mainChip(r.adapters);
+    const temp = a ? tempOf(a) : null;
+    const asleep = r.adapters.filter((x) => x.asleep && !x.nvidia).map((x) => x.short);
+    const mem = a?.integrated ? [fmt(a.sharedMb + a.dedicatedMb), 'of main memory in use'] : [a ? fmt(a.dedicatedMb) : '–', a?.dedicatedTotalMb ? `of ${fmt(a.dedicatedTotalMb)} video memory` : 'Video memory'];
+    $('#gpu').innerHTML = a ? [
+      `<div class="gname"><b>${esc(a.name)}</b><span>${chipLoad(a)}% busy${asleep.length ? `. ${esc(asleep.join(', '))} asleep` : ''}</span></div>`,
+      tiles([[temp != null ? `${temp} °C` : '–', temp != null ? 'Temperature' : 'Temperature, not reported'], mem, powerOf(a.readout)]),
+    ].join('') : `<div class="none"><b>No graphics chip found</b><span>${esc(r.countersError || r.error || '')}</span></div>`;
   } catch (e) {
     $('#gpu').innerHTML = `<div class="none"><b>Graphics unavailable</b><span>${esc(e.message)}</span></div>`;
   }
@@ -819,7 +820,9 @@ function renderPower(p, b, hold) {
   const facts = [
     bat,
     [p.cpuW != null ? `${p.cpuW.toFixed(1)} W` : '–', 'Processor'],
-    !p.gpuPresent ? ['None', 'No dedicated graphics card'] : p.gpuAwake ? [p.gpuW != null ? `${p.gpuW.toFixed(1)} W` : '–', 'Graphics card, in use'] : ['Asleep', 'Graphics card, about 0 W'],
+    !p.gpuPresent ? ['None', 'No dedicated graphics card']
+      : p.gpuAwake ? [p.gpuW != null ? `${p.gpuW.toFixed(1)} W` : '–', `${p.gpuName}, awake${p.gpuW == null ? ', no watts reading' : ''}`]
+      : ['Asleep', `${p.gpuName}, about 0 W`],
     [p.totalW != null ? `${p.totalExact ? '' : 'about '}${Math.round(p.totalW)} W` : '–', p.totalExact ? 'Whole laptop, measured from the battery' : 'Whole laptop, estimated (no charger sensor)'],
   ];
   $('#powerFacts').innerHTML = facts.map(([v, l]) => `<div><b>${esc(v)}</b><span>${esc(l)}</span></div>`).join('');
@@ -1102,44 +1105,90 @@ const quickClean = () => busyButton('.clean-btn', 'Cleaning', async () => {
 
 // ---------- Graphics ----------
 
+// The chip the hero and the Processor summary describe: an awake dedicated card, else the first chip that answered.
+const mainChip = (list) => list.find((a) => !a.integrated && !a.asleep) || list.find((a) => a.readout) || list[0];
+const chipKind = (a) => `${a.vendor ? a.vendor + ', ' : ''}${a.integrated ? 'built in' : 'dedicated'}${a.asleep ? (a.nvidia ? ', resting' : ', asleep') : ''}`;
+const chipLoad = (a) => Math.round(a.nvidia?.loadPct ?? a.loadPct);
+const tempOf = (a) => (a.readout?.tempC != null ? Math.round(a.readout.tempC) : null);
+// Watts from NVML, else the share of the chip's power budget that Windows' graphics kernel reports (never watts).
+const powerOf = (r) => (r?.powerW != null ? [`${r.powerW.toFixed(1)} W`, r.powerLimitW ? `Power draw, limit ${Math.round(r.powerLimitW)} W` : 'Power draw']
+  : r?.powerPct != null ? [`${Math.round(r.powerPct)}%`, 'Power, share of its limit'] : ['–', 'Power, not reported']);
+const ofGhz = (v, max) => (v != null ? `${ghz(v)}${max ? ` of ${ghz(max)}` : ''} GHz` : '–');
+const tiles = (list) => list.map(([v, l]) => `<div><b>${esc(v)}</b><span>${esc(l)}</span></div>`).join('');
+
+function chipCard(a, nvError) {
+  const r = a.readout, nv = a.nvidia;
+  const mem = a.integrated ? [fmt(a.sharedMb + a.dedicatedMb), 'of main memory in use'] : [fmt(a.dedicatedMb), a.dedicatedTotalMb ? `of ${fmt(a.dedicatedTotalMb)} video memory` : 'Video memory'];
+  const temp = tempOf(a);
+  const facts = !r && a.asleep ? '' : tiles([
+    [`${chipLoad(a)}%`, 'Load'],
+    [temp != null ? `${temp} °C` : '–', temp != null ? 'Temperature' : 'Temperature, not reported'],
+    [ofGhz(r?.clockMhz), r?.maxClockMhz ? `Clock, up to ${ghz(r.maxClockMhz)} GHz` : 'Clock'],
+    powerOf(r),
+    mem,
+    ...(r?.memClockMhz != null ? [[ofGhz(r.memClockMhz, r.maxMemClockMhz), 'Memory clock']] : []),
+    ...(r?.fanRpm != null ? [[`${r.fanRpm} RPM`, 'Fan']] : []),
+  ]);
+  const engines = a.engines.map((e) => [e.kind, e.pct]);
+  if (nv?.memLoadPct != null) engines.push(['Memory bus', nv.memLoadPct]);
+  const pstate = nv?.pstate != null ? `P${nv.pstate}` : '–';
+  const details = nv ? tiles([
+    [pstate, nv.pstate == null ? 'Power state' : nv.pstate >= 8 ? 'Power state: resting' : nv.pstate === 0 ? 'Power state: full speed' : 'Power state: partly awake'],
+    [nv.limits.length ? nv.limits.join(', ') : 'Nothing', 'Holding the clock back'],
+    [nv.slowdownC ? `${nv.slowdownC} °C` : '–', 'Slows itself down from'],
+    [`${nv.encoderPct ?? 0}% / ${nv.decoderPct ?? 0}%`, 'Video encoder / decoder'],
+    [nv.pcie || '–', 'Link to the processor (drops when idle)'],
+    [nv.driver || '–', 'NVIDIA driver'],
+  ]) : '';
+  const missing = !nv && a.vendor === 'NVIDIA' && !a.asleep && nvError ? `<p class="care-note">NVIDIA's driver did not answer, so watts and its own detail are missing. (${esc(nvError)})</p>` : '';
+  return `<div class="gchip" data-luid="${esc(a.luid)}">
+    <div class="block-head"><h2>${esc(a.name)}</h2><span class="muted">${esc(chipKind(a))}</span></div>
+    <p class="care-note lvl-${esc(a.status.level || 'good')}">${esc(a.status.text)}</p>
+    ${facts ? `<div class="facts four">${facts}</div>` : ''}
+    <div class="cores engines">${engines.length ? engines.map(([kind, pct]) => `<div class="core${pct >= 60 ? ' busy' : ''}"><i class="fill" style="height:${Math.min(100, pct)}%"></i><b>${Math.round(pct)}<small>%</small></b><span>${esc(kind)}</span></div>`).join('') : `<div class="empty">${a.asleep ? 'Asleep, no engine in use.' : 'Windows is not reporting engine use for this chip.'}</div>`}</div>
+    ${details ? `<div class="facts four">${details}</div>` : ''}
+    ${missing}
+  </div>`;
+}
+
 async function loadGpuPage() {
   let r;
   try { r = await api('/api/gpu'); } catch (e) { return toast(e.message, true); }
-  const g = r.gpu;
-  const dgpu = r.adapters.find((a) => !a.integrated);
-  const load = g?.loadPct ?? (dgpu ? Math.round(dgpu.loadPct) : null);
-  if (g || dgpu) S.gpuHist.push([Date.now(), load ?? 0, g?.tempC ?? null]);
-  S.gpuHot = (g?.slowdownC ?? 97) - 5;
+  const list = r.adapters;
+  const main = mainChip(list);
+  // The chart follows one chip so its line stays meaningful: the dedicated card when there is one (0 while asleep).
+  const charted = list.find((a) => !a.integrated) || list[0];
+  if (charted) S.gpuHist.push([Date.now(), chipLoad(charted), tempOf(charted)]);
+  S.gpuHot = (charted?.nvidia?.slowdownC ?? 97) - 5;
+  $('#gpuChartName').textContent = charted ? `${charted.short}: temperature and load` : 'Temperature and load';
 
-  $('#gpuBigWrap').className = 'pct lvl-' + (g ? g.status.level : 'good');
-  $('#gpuBig').textContent = g?.tempC ?? (load != null ? load : '–');
-  $('#gpuUnit').textContent = g?.tempC != null ? '°C' : load != null ? '%' : '';
-  $('#gpuStatus').textContent = g ? g.status.text : dgpu ? `Working at ${load}%.` : 'No graphics card found.';
+  const temp = main ? tempOf(main) : null;
+  $('#gpuBigWrap').className = 'pct lvl-' + (main?.status.level || 'good');
+  $('#gpuBig').textContent = temp ?? (main ? chipLoad(main) : '–');
+  $('#gpuUnit').textContent = temp != null ? '°C' : main ? '%' : '';
+  $('#gpuStatus').textContent = main ? `${main.short}: ${main.status.text}` : 'No graphics chip found.';
+  $('#gpuFacts').innerHTML = tiles(list.slice(0, 4).map((a) => [a.asleep && !a.nvidia ? 'Asleep' : `${chipLoad(a)}%`, `${a.short}, ${a.integrated ? 'built in' : 'dedicated'}`]));
   const note = $('#gpuNote');
-  note.hidden = !!g;
-  if (!g) note.textContent = `NVIDIA's driver did not answer, so temperature, clocks and power are missing. Load comes from Windows instead.${r.error ? ` (${r.error})` : ''}`;
+  note.hidden = !r.countersError;
+  if (r.countersError) note.textContent = `Windows' graphics counters are not available, so per-engine and per-app use are missing. (${r.countersError})`;
 
-  const of = (v, max, unit, k = 1) => (v != null ? `${(v / k).toFixed(k > 1 ? 1 : 0)}${max ? ` of ${(max / k).toFixed(k > 1 ? 1 : 0)}` : ''} ${unit}` : '–');
-  $('#gpuFacts').innerHTML = [
-    [load != null ? `${load}%` : '–', 'Load'],
-    [of(g?.clockMhz, null, 'GHz', 1000), g?.maxClockMhz ? `Clock, up to ${ghz(g.maxClockMhz)} GHz` : 'Clock'],
-    [g?.powerW != null ? `${g.powerW.toFixed(1)} W` : '–', g?.powerLimitW ? `Power draw, limit ${Math.round(g.powerLimitW)} W` : 'Power draw'],
-    [g?.vramUsedMb != null ? fmt(g.vramUsedMb) : '–', g?.vramTotalMb ? `of ${fmt(g.vramTotalMb)} video memory` : 'Video memory'],
-  ].map(([v, l]) => `<div><b>${esc(v)}</b><span>${esc(l)}</span></div>`).join('');
-
-  $('#gpuName').textContent = g?.name || dgpu?.name || 'Engines';
-  const engines = (dgpu?.engines || []).map((e) => [e.kind, e.pct]);
-  if (g?.memLoadPct != null) engines.push(['Memory bus', g.memLoadPct]);
-  const wrap = $('#gpuEngines');
-  if (wrap.children.length !== engines.length) wrap.innerHTML = engines.map(() => '<div class="core"><i class="fill"></i><b></b><span></span></div>').join('');
-  engines.forEach(([kind, pct], i) => {
-    const el = wrap.children[i];
-    el.classList.toggle('busy', pct >= 60);
-    el.querySelector('.fill').style.height = Math.min(100, pct) + '%';
-    el.querySelector('b').innerHTML = `${Math.round(pct)}<small>%</small>`;
-    el.querySelector('span').textContent = kind;
+  // Rebuilt every refresh, except that each engine bar keeps its element so its height animates instead of replaying.
+  const wrap = $('#gpuCards');
+  const old = new Map([...wrap.querySelectorAll('.gchip')].map((el) => [el.dataset.luid, [...el.querySelectorAll('.core .fill')].map((f) => f.style.height)]));
+  wrap.innerHTML = list.map((a) => chipCard(a, r.error)).join('') || `<div class="empty">${esc(r.countersError || 'No graphics chip found.')}</div>`;
+  const moves = [];
+  wrap.querySelectorAll('.gchip').forEach((el) => {
+    const before = old.get(el.dataset.luid) || [];
+    el.querySelectorAll('.core .fill').forEach((f, i) => {
+      if (before[i] == null || before[i] === f.style.height) return;
+      moves.push([f, f.style.height]);
+      f.style.height = before[i];
+    });
   });
-  if (!engines.length) wrap.innerHTML = `<div class="empty">${esc(r.countersError || 'Windows is not reporting engine use for this graphics card.')}</div>`;
+  if (moves.length) {
+    void wrap.offsetHeight; // apply the old heights first, so the change below is animated
+    moves.forEach(([f, to]) => (f.style.height = to));
+  }
   drawGpuChart();
 
   const groups = S.state?.groups || [];
@@ -1148,24 +1197,6 @@ async function loadGpuPage() {
     const act = !grp ? '' : grp.protected ? `<span class="lock">${esc(lockText(grp))}</span>` : `<button class="btn small ghost" data-close-app="${esc(grp.app)}">Close</button>`;
     return `<div class="rec"><div class="save">${a.pct.toFixed(a.pct < 10 ? 1 : 0)}%</div><div><div class="t">${esc(grp?.app || a.app)}</div><p class="w">${esc(a.adapter)}, ${esc(a.engine === '3D' ? a.engine : a.engine.toLowerCase())}</p></div><div class="act">${act}</div></div>`;
   }).join('') : '<div class="empty">No app is using graphics right now.</div>';
-
-  $('#adapters').innerHTML = r.adapters.map((a) => {
-    const mem = a.integrated ? `${fmt(a.sharedMb + a.dedicatedMb)} of main memory` : `${fmt(a.dedicatedMb)} of ${fmt(a.dedicatedTotalMb)} video memory`;
-    const rest = !a.integrated && g?.pstate >= 8 && a.loadPct < 1 ? ', resting' : '';
-    return `<div class="${a.loadPct >= 1 ? 'on' : ''}"><b>${Math.round(a.loadPct)}<small>%</small></b><span class="t">${esc(a.short)}${a.integrated ? ', built in' : ''}${rest}</span><span>${esc(mem)}</span></div>`;
-  }).join('') || `<div class="none"><b>Graphics counters unavailable</b><span>${esc(r.countersError || '')}</span></div>`;
-
-  const pstate = g?.pstate != null ? `P${g.pstate}` : '–';
-  $('#gpuDetails').innerHTML = g ? [
-    [pstate, g.pstate == null ? 'Power state' : g.pstate >= 8 ? 'Power state: resting' : g.pstate === 0 ? 'Power state: full speed' : 'Power state: partly awake'],
-    [g.limits.length ? g.limits.join(', ') : 'Nothing', 'Holding the clock back'],
-    [of(g.memClockMhz, g.maxMemClockMhz, 'GHz', 1000), 'Memory clock'],
-    [g.slowdownC ? `${g.slowdownC} °C` : '–', 'Slows itself down from'],
-    [`${g.encoderPct ?? 0}% / ${g.decoderPct ?? 0}%`, 'Video encoder / decoder'],
-    [g.pcie || '–', 'Link to the processor (drops when idle)'],
-    [g.driver || '–', 'NVIDIA driver'],
-    [r.adapters.length ? String(r.adapters.length) : '–', 'Graphics chips'],
-  ].map(([v, l]) => `<div><b>${esc(v)}</b><span>${esc(l)}</span></div>`).join('') : '';
 }
 
 // ---------- Settings ----------

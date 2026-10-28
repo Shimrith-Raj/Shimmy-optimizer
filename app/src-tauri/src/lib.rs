@@ -206,25 +206,31 @@ impl Shared {
     h.push_back(battery::PowerPoint { t: store::now_ms(), battery_w, cpu_w, plugged: live.plugged, held });
   }
 
-  /// Whether there is a dedicated graphics card, whether it is awake (Windows' GPU engine counters show it in use) and,
-  /// only then, its watts from NVML. Asking NVML wakes a sleeping card, so it is never asked while the card sleeps.
-  fn rtx_power(&self) -> (bool, bool, Option<f64>) {
-    let (present, awake) = match self.gpu_counters.lock().unwrap().get_or_insert_with(gpu::Counters::open) {
+  /// The dedicated graphics card for the Battery page: its short name (None when there is none), whether it is awake
+  /// (not `asleep` in gpu.rs) and, only then and only for NVIDIA, its watts from NVML. The graphics kernel gives no
+  /// watts, so other vendors' cards have none. Asking NVML wakes a sleeping card, so it is never asked while it sleeps.
+  fn dgpu_power(&self) -> (Option<String>, bool, Option<f64>) {
+    let card = match self.gpu_counters.lock().unwrap().get_or_insert_with(gpu::Counters::open) {
       Ok(c) => {
         let adapters = c.sample(&HashMap::new()).0;
-        let dedicated: Vec<_> = adapters.iter().filter(|a| !a.integrated).collect();
-        (!dedicated.is_empty(), dedicated.iter().any(|a| a.load_pct >= 1.0))
+        let mut dedicated: Vec<_> = adapters.into_iter().filter(|a| !a.integrated).collect();
+        // The busiest one, if there are several.
+        dedicated.sort_by(|a, b| b.load_pct.total_cmp(&a.load_pct));
+        dedicated.into_iter().next()
       }
-      Err(_) => (false, false),
+      Err(_) => None,
     };
-    if !awake {
-      return (present, false, None);
+    let Some(card) = card else { return (None, false, None) };
+    // Asleep only when idle next to a built-in chip; a card that runs the screen itself is always awake.
+    let awake = !card.asleep;
+    if !awake || card.vendor != "NVIDIA" {
+      return (Some(card.short), awake, None);
     }
     let w = match self.nvml.lock().unwrap().get_or_insert_with(|| nvml_wrapper::Nvml::init().map_err(|e| e.to_string())) {
       Ok(n) => gpu::nvidia(n).ok().and_then(|g| g.power_w),
       Err(_) => None,
     };
-    (true, true, w)
+    (Some(card.short), true, w)
   }
 
   /// Puts CPU boost back if Shimmy turned it off. Used when heat protection is switched off, at Exit and at start-up.
@@ -449,13 +455,27 @@ fn get_history(s: State<'_, Shr>) -> Value {
   json!({ "points": s.store.history(), "cpu": s.store.cpu_history() })
 }
 
-/// The Graphics page (and the Processor page's summary): NVIDIA detail through NVML, which wakes the RTX, so it is
-/// read only while a page asks; plus Windows' counters for every GPU, per engine and per app.
+/// The Graphics page (and the Processor page's summary): one entry per graphics chip, any vendor. Windows' counters
+/// give per-engine and per-app use; the graphics kernel gives temperature, clocks, fan and power share for every chip
+/// that may be asked (a sleeping dedicated card never is, see gpu::Counters::readouts); NVML adds NVIDIA's detail,
+/// read only while a page asks, as since Phase 2. NVML is not loaded at all when Windows lists no NVIDIA chip.
 #[tauri::command]
 async fn get_gpu(s: State<'_, Shr>) -> Result<Value, String> {
   let s = s.inner().clone();
   tauri::async_runtime::spawn_blocking(move || {
-    let (nv, error) = {
+    let names: HashMap<u32, String> = system::list_procs(&mut s.sys.lock().unwrap()).iter().map(|p| (p.pid, procs::app_of(p))).collect();
+    let (mut adapters, apps, counters_error) = match s.gpu_counters.lock().unwrap().get_or_insert_with(gpu::Counters::open) {
+      Ok(c) => {
+        let (a, p) = c.sample(&names);
+        (a, p, None)
+      }
+      Err(e) => (Vec::new(), Vec::new(), Some(e.clone())),
+    };
+    // Without Windows' list, try NVML anyway, as before: it is the only source left.
+    let want_nvml = counters_error.is_some() || adapters.iter().any(|a| a.vendor == "NVIDIA");
+    let (nv, error) = if !want_nvml {
+      (None, None)
+    } else {
       let mut slot = s.nvml.lock().unwrap();
       match slot.get_or_insert_with(|| nvml_wrapper::Nvml::init().map_err(|e| e.to_string())) {
         Ok(n) => match gpu::nvidia(n) {
@@ -465,16 +485,11 @@ async fn get_gpu(s: State<'_, Shr>) -> Result<Value, String> {
         Err(e) => (None, Some(e.clone())),
       }
     };
-    let names: HashMap<u32, String> = system::list_procs(&mut s.sys.lock().unwrap()).iter().map(|p| (p.pid, procs::app_of(p))).collect();
-    let mut slot = s.gpu_counters.lock().unwrap();
-    let (adapters, apps, counters_error) = match slot.get_or_insert_with(gpu::Counters::open) {
-      Ok(c) => {
-        let (a, p) = c.sample(&names);
-        (a, p, None)
-      }
-      Err(e) => (Vec::new(), Vec::new(), Some(e.clone())),
-    };
-    json!({ "gpu": nv, "error": error, "adapters": adapters, "apps": apps, "countersError": counters_error })
+    match s.gpu_counters.lock().unwrap().as_mut() {
+      Some(Ok(c)) => c.readouts(&mut adapters, nv),
+      _ => gpu::readouts_without_counters(&mut adapters, nv),
+    }
+    json!({ "error": error, "adapters": adapters, "apps": apps, "countersError": counters_error })
   })
   .await
   .map_err(|e| e.to_string())
@@ -865,13 +880,14 @@ async fn get_battery(s: State<'_, Shr>) -> Result<Value, String> {
       "myasus": hold::myasus_limit(),
       "overridden": s.hold_watch.lock().unwrap().override_warned,
     });
-    let (gpu_present, gpu_awake, gpu_w) = s.rtx_power();
+    let (gpu_name, gpu_awake, gpu_w) = s.dgpu_power();
     let cpu_w = rows.as_deref().and_then(|r| sensors::value(r, "Cpu", "Power", "Package"));
     let total = battery::total_draw(view.plugged, view.rate_w, cpu_w, gpu_w.unwrap_or(0.0), *s.rest_w.lock().unwrap());
     let power = json!({
       "batteryW": view.rate_w,
       "cpuW": cpu_w,
-      "gpuPresent": gpu_present,
+      "gpuPresent": gpu_name.is_some(),
+      "gpuName": gpu_name,
       "gpuAwake": gpu_awake,
       "gpuW": gpu_w,
       "totalW": total.map(|t| t.0),

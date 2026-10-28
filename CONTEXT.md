@@ -19,7 +19,7 @@ Home (four readouts and Clean now) · Memory · Processor · Graphics · Storage
 | `system.rs` | Win32: processes, window titles, close, trim, memory, battery |
 | `cpu.rs`, `sensors.rs` | Processor page (cores from `GetLogicalProcessorInformationEx`, effective clocks from Windows' processor counters); the LibreHardwareMonitor sidecar (`resources/sensors/shimmy-sensors.cs`, compiled by `build.rs` with Windows' own csc.exe) |
 | `caches.rs` | Old caches on the Storage page (age filter, Recycle Bin, skipped while the app runs) |
-| `gpu.rs` | Graphics page: NVML (RTX, only while a page asks) and Windows' GPU Engine counters (every adapter, per app) |
+| `gpu.rs` | Graphics page, any vendor: Windows' GPU Engine counters (every adapter, per engine and per app), the graphics kernel's D3DKMT readout (temperature, clocks, fan, power share; a sleeping dedicated card is never asked) and NVML for NVIDIA detail (only while a page asks), merged per adapter |
 | `storage.rs`, `clean.rs`, `finder.rs`, `jobs.rs` | Storage page, safe clean and DISM, big and duplicate finder with its deletion gate, background jobs |
 | `update.rs` | Updates page: reads GitHub's latest release, downloads `Shimmy-Optimizer-Setup.exe` to `%ProgramData%\Shimmy Optimizer\updates` (administrators-only), checks its SHA-256, starts it. The only network use in Shimmy, all in Rust |
 | `hold.rs` | Run from the charger: hold level, plug-in re-hold, override and drain warnings |
@@ -44,7 +44,7 @@ Data lives in `%APPDATA%\com.shimmy.optimizer\`: `settings.json`, `history.json`
   `releases/latest/download/Shimmy-Optimizer-Setup.exe`, so any other name breaks them.
 - **Dev build:** `SHIMMY_NO_ADMIN=1 CARGO_TARGET_DIR=src-tauri/target-dev npx tauri build --no-bundle --config '{"identifier":"com.shimmy.optimizer.dev"}'`.
   It has no admin manifest and its own data folder, so it runs beside the real Shimmy. It has no CPU temperature, and Start with Windows is refused.
-- **Tests:** in `app/src-tauri`, `SHIMMY_NO_ADMIN=1 CARGO_TARGET_DIR=target-dev cargo test` (48 tests). Real-PC checks: add `--test real_scan -- --ignored`. They read only, except `set_limit`, which
+- **Tests:** in `app/src-tauri`, `SHIMMY_NO_ADMIN=1 CARGO_TARGET_DIR=target-dev cargo test` (73 tests). Real-PC checks: add `--test real_scan -- --ignored`. They read only, except `set_limit`, which
   writes the charge limit and runs only when `SHIMMY_LIMIT` is set.
 - The frontend is embedded in the exe, so UI changes need a rebuild. An elevated Shimmy that is running locks its exe: quit it from the tray first.
 

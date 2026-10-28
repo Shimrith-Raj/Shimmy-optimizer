@@ -559,3 +559,42 @@ GitHub release with and without a digest; the download, the hash check and a del
 from the elevated, Task Scheduler-started Shimmy (the breakaway flag) and Shimmy exiting cleanly; the notification and the
 rail marker; the Updates page layout. A hybrid Intel CPU was only tested as fixture data. The checksum guards against a
 damaged or swapped download, not a compromised release, since the hash comes from the same GitHub release.
+### Built: 10d (2026-10-28)
+Graphics for every vendor. Each graphics chip (AMD, Intel, NVIDIA) gets its own readout, from the research above.
+- **Graphics kernel readout** (`gpu.rs`, `mod kmt`): per adapter, by the LUID Windows' counters and DXGI already use,
+  `D3DKMTOpenAdapterFromLuid`, then `D3DKMTQueryAdapterInfo` for `KMTQAITYPE_ADAPTERTYPE` (hybrid bits),
+  `KMTQAITYPE_ADAPTERPERFDATA` (temperature, fan, power, memory clock) and `KMTQAITYPE_NODEPERFDATA` for the engine Windows
+  calls 3D (its clock and maximum), then `D3DKMTCloseAdapter` through a drop guard, so the handle is closed on every path.
+  Opened and closed per query; nothing is kept, so `Shared::release()` needs nothing new. Feature `Wdk_Graphics_Direct3D`.
+- **Never wakes a sleeping card:** a dedicated card is `asleep` (and asked nothing) when Windows' counters show it under 1 %
+  on a PC that also has a built-in chip. Without a built-in chip the card runs the screen and is always awake. Built-in
+  chips are asked whenever the page is open. Only `get_gpu` asks the kernel; the Battery page and the sampler never do.
+- **Units and missing values:** temperature is tenths of a °C, power is tenths of a % of the chip's power limit (shown as
+  a %, never as watts), clocks are Hz. Drivers leave unsupported fields at 0, and no answering GPU is at 0 °C, 0 %, 0 MHz,
+  so 0 (and anything out of range) becomes "not reported". That also covers a fan that is really stopped, which the
+  kernel cannot tell apart from "no fan reading"; the laptop's fans are on the Processor page through ASUS anyway.
+- **Built in or dedicated:** the kernel's hybrid bits decide once an adapter has been asked. Before that, NVIDIA is
+  dedicated and others are built in under 1 GB of their own memory, so an AMD or Intel chip with a big memory carve-out
+  starts as dedicated: the safe side (asked only while in use), corrected by its first answer.
+- **NVML stays** for NVIDIA, merged per adapter: NVML values win, the kernel fills gaps; NVML's watts replace the kernel's
+  power share. NVML is attached to the NVIDIA adapter with the same name (else the first NVIDIA one) and is not loaded
+  at all when Windows lists no NVIDIA chip. On the Graphics and Processor pages it is still read whenever the page is
+  open, as decided in Phase 2.
+- **UI:** the Graphics page shows one section per chip (name, vendor, built in or dedicated, asleep or resting, a
+  verdict, load, temperature, clock, power, video or shared memory, memory clock and fan when reported, its engines),
+  and P-state, what holds the clock back, encoder/decoder, PCIe link and driver only when NVML answered. The hero shows
+  the awake dedicated card, else the first chip that answered; the hero facts list every chip; the chart follows the
+  dedicated card when there is one and is titled with its name. The Processor summary describes the same chip and names
+  any sleeping card. The Battery page names the dedicated card instead of "RTX"; watts stay NVML only.
+- README's Graphics section no longer says GPU readings need an NVIDIA card.
+- Pure logic is unit-tested (LUID parsing both ways, 0 → not reported, NVML + kernel merge, NVML placement, built in or
+  dedicated, sleep, verdicts): 44 Rust tests. New read-only real-PC check `real_d3dkmt` (skips a sleeping card).
+- Deviations: memory bandwidth and PCIe bandwidth from `ADAPTERPERFDATA` are left out (they are running totals that need
+  a rate); voltage too. VRAM stays on Windows' "GPU Adapter Memory" counters, which were already vendor-neutral.
+- Cross-check from Linux: `cargo check --target x86_64-pc-windows-msvc --all-targets` is clean. blake3's build script
+  wants `ml64.exe` there, so set `CARGO_FEATURE_PURE=1` for the check (no effect on Windows builds).
+- **Not verified, nothing ran on Windows:** whether this laptop's Radeon and RTX drivers fill `ADAPTERPERFDATA` and
+  `NODEPERFDATA` at all (Task Manager's GPU temperature suggests the RTX does; the Radeon is unknown); that the RTX still
+  goes to sleep after Shimmy has asked it while it was in use; the units on real hardware; that the 3D engine's PDH index
+  is its node ordinal on both drivers; the page layout with two chips. Run `real_d3dkmt` and `real_gpu_counters` with `--ignored`,
+  then open the Graphics page with the RTX asleep and again under a game.
