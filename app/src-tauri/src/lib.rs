@@ -43,6 +43,10 @@ pub struct Shared {
   /// Opened on first use, only when the CPU page asks for the GPU.
   nvml: Mutex<Option<Result<nvml_wrapper::Nvml, String>>>,
   base_mhz: Option<f64>,
+  /// Which logical processors share a core, read once at start.
+  topology: cpu::Topology,
+  /// Busy % and effective clocks, written only by the sampler (every 3 s) so the window is always the same length.
+  cpu_live: Mutex<cpu::Live>,
   /// The laptop's model from the BIOS, and whether the ASUS firmware writes were tested on it (asus.rs).
   model: String,
   model_tested: bool,
@@ -253,6 +257,7 @@ impl Shared {
     *self.nvml.lock().unwrap() = None;
     *self.gpu_counters.lock().unwrap() = None;
     {
+      // Only the processor list is wanted back (list_procs divides by it); nothing reads this System's usage.
       let mut sys = self.sys.lock().unwrap();
       *sys = System::new();
       sys.refresh_cpu_all();
@@ -383,12 +388,12 @@ async fn get_state(s: State<'_, Shr>) -> Result<Value, String> {
     let groups = build_groups(&procs_now, &own);
     let mem = system::mem_now();
     let recs = recommend(&procs_now, &groups, &mem);
-    let home = system::home(&mut sys);
-    let loads: Vec<f32> = sys.cpus().iter().map(|c| c.cpu_usage()).collect();
+    let live = s.cpu_live.lock().unwrap().clone();
+    let home = system::home(live.total);
     let name = sys.cpus().first().map(|c| c.brand().trim().to_string()).unwrap_or_default();
     drop(sys);
     let (rows, err) = s.readings();
-    let cpu = cpu::build(name, &loads, home.cpu_pct, s.base_mhz, rows.as_deref(), s.fans(), err);
+    let cpu = cpu::build(name, &s.topology, &live, s.base_mhz, rows.as_deref(), s.fans(), err);
     let battery_health = {
       let report = s.battery_report.lock().unwrap();
       battery::health(rows.as_deref(), report.as_ref().map(|(_, r)| r)).map(f64::round)
@@ -812,7 +817,7 @@ async fn get_battery(s: State<'_, Shr>) -> Result<Value, String> {
         }
       }
     }
-    let live = system::home(&mut s.sys.lock().unwrap()).battery;
+    let live = system::battery_now();
     let rows = s.readings().0;
     let report = s.battery_report.lock().unwrap().as_ref().map(|(_, r)| r.clone());
     let limit = s.settings.lock().unwrap().charge_limit;
@@ -1278,6 +1283,11 @@ fn automation(app: &AppHandle, s: &Shr, tick: u64) {
 fn start_sampler(app: AppHandle) {
   std::thread::spawn(move || {
     let last = AtomicU64::new(u64::MAX);
+    // The one System whose processor usage is ever refreshed, and the one query for effective clocks.
+    let mut cpu_sys = System::new();
+    cpu_sys.refresh_cpu_all();
+    let mut perf = cpu::Perf::open().ok();
+    std::thread::sleep(Duration::from_millis(500));
     for tick in 0u64.. {
       update_tray(&app, &last);
       let s = app.state::<Shr>();
@@ -1286,13 +1296,15 @@ fn start_sampler(app: AppHandle) {
       if tick % 600 == 0 {
         s.reapply_charge_limit();
       }
+      cpu_sys.refresh_cpu_usage();
+      {
+        let clocks = perf.as_mut().map(|p| p.sample()).unwrap_or_default();
+        let mut live = s.cpu_live.lock().unwrap();
+        *live = cpu::Live { total: cpu_sys.global_cpu_usage(), per_cpu: cpu_sys.cpus().iter().map(|c| c.cpu_usage()).collect(), clocks };
+      }
       if tick % 3 == 0 {
         s.store.sample(system::mem_now().used_mb);
-        let load = {
-          let mut sys = s.sys.lock().unwrap();
-          sys.refresh_cpu_usage();
-          sys.global_cpu_usage()
-        };
+        let load = s.cpu_live.lock().unwrap().total;
         let temp = s.readings().0.and_then(|r| sensors::value(&r, "Cpu", "Temperature", "Core (Tctl/Tdie)"));
         s.store.sample_cpu(load, temp.map(|t| t as f32));
       }
@@ -1332,6 +1344,7 @@ pub fn run() {
       sys.refresh_cpu_all();
       let sensor_state = sensors::SensorState::default();
       let model = asus::model();
+      let topology = cpu::topology().unwrap_or_else(|| cpu::Topology::single_threads(sys.cpus().len()));
       sensors::start(app.path().resource_dir()?.join("sensors").join("shimmy-sensors.exe"), sensor_state.clone());
       app.manage::<Shr>(Arc::new(Shared {
         sys: Mutex::new(sys),
@@ -1341,6 +1354,8 @@ pub fn run() {
         atk: asus::Atk::open(),
         nvml: Mutex::new(None),
         base_mhz: cpu::base_mhz(),
+        topology,
+        cpu_live: Mutex::new(cpu::Live::default()),
         model_tested: asus::is_tested(&model),
         model,
         profile: app.path().home_dir()?,

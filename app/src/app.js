@@ -295,7 +295,8 @@ function renderCpu() {
   else if (c.tempC == null) note.textContent = "The processor's temperature sensor is not answering right now, so load is shown instead. Another monitoring app (such as an ASUS utility) may be holding it; Shimmy keeps trying.";
 
   $('#cpuName').textContent = c.name || 'Cores';
-  $('#coreCaption').textContent = `${c.cores.length} cores, ${c.threads} threads. The shading is how busy each core is.`;
+  const hybrid = c.cores.some((k) => k.kind);
+  $('#coreCaption').textContent = `${c.cores.length} cores, ${c.threads} threads. The shading is how busy each core is, the number is the speed it is really running at.${hybrid ? ' P-cores are the fast ones, E-cores save power.' : ''}`;
   // Core tiles are built once and then only updated, so live refreshes slide the bars instead of replaying an animation.
   const wrap = $('#cores');
   if (wrap.children.length !== c.cores.length) wrap.innerHTML = c.cores.map(() => '<div class="core"><i class="fill"></i><b></b><span></span></div>').join('');
@@ -304,7 +305,7 @@ function renderCpu() {
     el.classList.toggle('busy', k.loadPct >= 60);
     el.querySelector('.fill').style.height = Math.min(100, k.loadPct) + '%';
     el.querySelector('b').innerHTML = k.clockMhz ? `${ghz(k.clockMhz)}<small>GHz</small>` : `${Math.round(k.loadPct)}<small>%</small>`;
-    el.querySelector('span').textContent = k.clockMhz ? `${Math.round(k.loadPct)}% busy${k.powerW != null ? `, ${k.powerW.toFixed(1)} W` : ''}` : 'busy';
+    el.querySelector('span').textContent = (k.kind ? `${k.kind}, ` : '') + (k.clockMhz ? `${Math.round(k.loadPct)}% busy` : 'busy');
   });
 
   const top = S.state.groups.filter((g) => g.cpu >= 0.5).sort((a, b) => b.cpu - a.cpu).slice(0, 6);

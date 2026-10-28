@@ -182,14 +182,14 @@ pub struct Home {
   pub battery: Battery,
 }
 
-pub fn home(sys: &mut System) -> Home {
-  sys.refresh_cpu_usage();
+/// `cpu_pct` is the sampler's latest reading; only the sampler refreshes processor use.
+pub fn home(cpu_pct: f32) -> Home {
   let (mut free, mut total) = (0u64, 0u64);
   unsafe {
     let _ = GetDiskFreeSpaceExW(w!("C:\\"), None, Some(&mut total), Some(&mut free));
   }
   Home {
-    cpu_pct: sys.global_cpu_usage(),
+    cpu_pct,
     disk_free_gb: free as f64 / 1_073_741_824.0,
     disk_total_gb: total as f64 / 1_073_741_824.0,
     battery: battery_now(),

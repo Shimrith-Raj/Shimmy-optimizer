@@ -1,5 +1,8 @@
 fn main() {
-  sensors_sidecar();
+  // csc.exe only exists on Windows; a build host without it (a compile check on Linux) skips the sidecar.
+  if cfg!(windows) {
+    sensors_sidecar();
+  }
   // Shimmy always runs elevated (PLAN.md). SHIMMY_NO_ADMIN=1 builds without the admin manifest, for tests and
   // non-elevated development runs only.
   println!("cargo:rerun-if-env-changed=SHIMMY_NO_ADMIN");

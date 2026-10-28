@@ -227,7 +227,7 @@ fn dxgi_adapters() -> HashMap<String, AdapterInfo> {
   out
 }
 
-fn read(counter: PDH_HCOUNTER) -> Vec<(String, f64)> {
+pub(crate) fn read(counter: PDH_HCOUNTER) -> Vec<(String, f64)> {
   unsafe {
     let (mut size, mut count) = (0u32, 0u32);
     if PdhGetFormattedCounterArrayW(counter, PDH_FMT_DOUBLE, &mut size, &mut count, None) != PDH_MORE_DATA {
