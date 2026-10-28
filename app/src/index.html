@@ -99,6 +99,11 @@
     </div>
     <p class="sensor-note" id="sensorNote" hidden></p>
 
+    <div class="recs-block reveal">
+      <div class="block-head"><h2>Fan and heat</h2><span class="muted" id="fanCaption"></span></div>
+      <div id="fanCtl"></div>
+    </div>
+
     <div class="cores-block reveal">
       <div class="block-head"><h2 id="cpuName">Cores</h2><span class="muted" id="coreCaption"></span></div>
       <div id="cores" class="cores"></div>
@@ -245,6 +250,14 @@
         <p class="used" id="batStatus">Reading the battery</p>
       </div>
       <div class="facts" id="batFacts"></div>
+    </div>
+
+    <div class="chart-block reveal">
+      <div class="block-head"><h2>Power</h2><span class="muted">Live, and the last hour while Shimmy runs</span></div>
+      <div class="facts four" id="powerFacts"></div>
+      <p class="warn-box" id="drainNote" hidden></p>
+      <canvas id="powerChart"></canvas>
+      <div class="key"><span><i class="k-temp"></i>Battery, W (above 0 charging, below 0 draining)</span><span><i class="k-load"></i>Processor, W</span><span><i class="k-drain"></i>Draining while plugged in</span></div>
     </div>
 
     <div class="chart-block reveal">

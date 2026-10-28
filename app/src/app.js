@@ -12,7 +12,7 @@ const COMMANDS = {
   '/api/state': 'get_state', '/api/history': 'get_history', '/api/log': 'get_log', '/api/startup': 'get_startup',
   '/api/gpu': 'get_gpu', '/api/storage': 'get_storage', '/api/usage/scan': 'start_usage_scan', '/api/folder': 'storage_folder',
   '/api/open': 'open_path', '/api/clean': 'get_clean', '/api/clean/scan': 'start_clean_scan', '/api/clean/run': 'start_clean',
-  '/api/battery': 'get_battery', '/api/settings': 'get_settings', '/api/settings/save': 'set_settings', '/api/autostart': 'set_autostart', '/api/plugged': 'set_plugged_mode', '/api/caches/scan': 'start_cache_scan', '/api/caches/run': 'start_cache_clean', '/api/folder/preview': 'folder_preview', '/api/folder/delete': 'folder_delete', '/api/bin/empty': 'empty_bin', '/api/hibernation': 'set_hibernation', '/api/restore': 'get_restore_points', '/api/apps-settings': 'open_apps_settings', '/api/charge-limit': 'set_charge_limit', '/api/dism': 'start_dism', '/api/finder': 'start_finder', '/api/finder/delete': 'finder_delete', '/api/startup/toggle': 'toggle_startup', '/api/close': 'close_procs', '/api/trim': 'trim', '/api/quickclean': 'quick_clean',
+  '/api/battery': 'get_battery', '/api/settings': 'get_settings', '/api/settings/save': 'set_settings', '/api/autostart': 'set_autostart', '/api/plugged': 'set_plugged_mode', '/api/caches/scan': 'start_cache_scan', '/api/caches/run': 'start_cache_clean', '/api/folder/preview': 'folder_preview', '/api/folder/delete': 'folder_delete', '/api/bin/empty': 'empty_bin', '/api/hibernation': 'set_hibernation', '/api/restore': 'get_restore_points', '/api/apps-settings': 'open_apps_settings', '/api/charge-limit': 'set_charge_limit', '/api/fan': 'set_fan_mode', '/api/heat': 'set_heat_protection', '/api/dism': 'start_dism', '/api/finder': 'start_finder', '/api/finder/delete': 'finder_delete', '/api/startup/toggle': 'toggle_startup', '/api/close': 'close_procs', '/api/trim': 'trim', '/api/quickclean': 'quick_clean',
 };
 async function api(path, body) {
   try {
@@ -253,7 +253,8 @@ function renderCpu() {
   $('#cpuBigWrap').className = 'pct lvl-' + c.status.level;
   $('#cpuBig').textContent = c.tempC != null ? Math.round(c.tempC) : Math.round(c.loadPct);
   $('#cpuUnit').textContent = c.tempC != null ? '°C' : '%';
-  $('#cpuStatus').textContent = c.status.text;
+  $('#cpuStatus').textContent = c.status.text + (S.state.heat?.boostOff ? ' Boost is off to cool it down.' : '');
+  renderFan();
   const [fan, ...otherFans] = c.fans;
   const facts = [
     [`${Math.round(c.loadPct)}%`, 'Load'],
@@ -286,6 +287,29 @@ function renderCpu() {
     return `<div class="rec"><div class="save">${g.cpu.toFixed(1)}%</div><div><div class="t">${esc(g.app)}</div><p class="w">${g.count} process${g.count === 1 ? '' : 'es'}, ${fmt(g.mb)} of memory</p></div><div class="act">${act}</div></div>`;
   }).join('') : '<div class="empty">Nothing is using the processor right now.</div>';
   drawCpuChart();
+}
+
+const FAN_MODES = [
+  ['silent', 'Silent', 'Quietest. The firmware also lowers the processor\'s power: about 34 W under full load.'],
+  ['standard', 'Standard', 'The everyday balance: about 38 W under full load.'],
+  ['performance', 'Performance', 'Full power, about 45 W under full load, with the fans at their loudest.'],
+];
+
+function renderFan() {
+  const { fanMode, heat } = S.state;
+  const fan = S.state.cpu.fans[0];
+  $('#fanCaption').textContent = fan ? `${fan.name} at ${fan.rpm.toLocaleString()} rpm` : 'Fn+F switches the same modes';
+  const modes = fanMode
+    ? `<div class="limits">${FAN_MODES.map(([id, name, why]) => `<button data-fan="${id}" class="${fanMode === id ? 'on' : ''}"><b>${name}</b><span>${why}</span></button>`).join('')}</div>`
+    : '<p class="care-note">This laptop\'s firmware does not offer fan modes through the route Shimmy uses.</p>';
+  const since = heat.since ? ` since ${new Date(heat.since).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : '';
+  const text = !heat.enabled
+    ? 'Off. Boost stays on whatever the temperature.'
+    : heat.boostOff
+      ? `Boost is off${since}: cooling down. It comes back after 2 minutes at ${heat.coolC} °C or less.`
+      : `On. If the processor stays at ${heat.hotC} °C or more for 30 seconds, Shimmy turns boost off until it cools to ${heat.coolC} °C. About 8 °C cooler for a small loss of speed.`;
+  $('#fanCtl').innerHTML = `<div class="hold${heat.boostOff ? ' on' : ''}"><div><b>Heat protection</b><p>${esc(text)}</p></div>${sw('data-heat', heat.enabled, 'Heat protection')}</div>${modes}
+    <p class="care-note">Fn+F and MyASUS change the same setting; Shimmy shows whichever mode is active. The fans themselves follow the firmware's curve for the mode, which cannot be changed on this laptop.</p>`;
 }
 
 async function loadGpu() {
@@ -750,8 +774,94 @@ async function loadBattery() {
   const h = b.history;
   $('#wearCaption').textContent = h.length > 1 ? `${h[0].date} to ${h[h.length - 1].date}, from Windows' battery report` : '';
   drawWearChart();
+  S.powerHist = r.powerHistory;
+  renderPower(r.power, b, r.hold);
   renderCare(b, r.hold);
   if (r.error) toast(r.error, true);
+}
+
+function renderPower(p, b, hold) {
+  const w = (v) => `${Math.abs(v) < 0.5 ? 0 : Math.round(v)} W`;
+  const bat = p.batteryW == null ? ['–', 'Battery'] : p.batteryW >= 0.5 ? [`+${w(p.batteryW)}`, 'Going into the battery'] : p.batteryW <= -0.5 ? [`−${w(-p.batteryW)}`, 'Coming out of the battery'] : ['0 W', 'Battery resting'];
+  const facts = [
+    bat,
+    [p.cpuW != null ? `${p.cpuW.toFixed(1)} W` : '–', 'Processor'],
+    p.gpuAwake ? [p.gpuW != null ? `${p.gpuW.toFixed(1)} W` : '–', 'RTX 3050, in use'] : ['Asleep', 'RTX 3050, about 0 W'],
+    [p.totalW != null ? `${p.totalExact ? '' : 'about '}${Math.round(p.totalW)} W` : '–', p.totalExact ? 'Whole laptop, measured from the battery' : 'Whole laptop, estimated (no charger sensor)'],
+  ];
+  $('#powerFacts').innerHTML = facts.map(([v, l]) => `<div><b>${esc(v)}</b><span>${esc(l)}</span></div>`).join('');
+  const note = $('#drainNote');
+  note.hidden = !p.draining;
+  if (p.draining) {
+    const out = Math.round(-p.batteryW);
+    note.textContent = hold?.on
+      ? `Run from the charger is on, but the battery is being used: ${out} W are coming out of it because the charger cannot keep up with this load. It stops once the load drops.`
+      : `Plugged in, but ${out} W are coming out of the battery: the charger cannot keep up with this load.`;
+  }
+  drawPowerChart();
+}
+
+// Battery watts (accent; above 0 charging, below 0 draining) and processor watts (ink) over the last hour. Stretches
+// where the battery drained while plugged in are shaded red.
+function drawPowerChart() {
+  const c = $('#powerChart');
+  const dpr = window.devicePixelRatio || 1;
+  const w = c.clientWidth, h = c.clientHeight;
+  if (!w) return;
+  c.width = w * dpr; c.height = h * dpr;
+  const g = c.getContext('2d');
+  g.scale(dpr, dpr);
+  const css = getComputedStyle(document.body);
+  const col = (n) => css.getPropertyValue(n).trim();
+  const font = getComputedStyle(document.documentElement).fontFamily;
+  const L = 64, R = 20, T = 24, B = 34, range = 3600000, now = Date.now(), from = now - range;
+  const pts = (S.powerHist || []).filter((p) => p[0] >= from);
+  const vals = pts.flatMap((p) => [p[1], p[2]]).filter((v) => v != null);
+  const top = Math.max(20, Math.ceil(Math.max(0, ...vals) / 10) * 10);
+  const bottom = Math.min(0, Math.floor(Math.min(0, ...vals) / 10) * 10);
+  const X = (t) => L + ((t - from) / range) * (w - L - R);
+  const Y = (v) => T + (1 - (v - bottom) / (top - bottom)) * (h - T - B);
+  g.font = `13px ${font}`; g.fillStyle = col('--muted'); g.textAlign = 'right';
+  const step = Math.max(10, Math.ceil((top - bottom) / 4 / 10) * 10);
+  for (let v = bottom; v <= top; v += step) g.fillText(`${v} W`, L - 14, Y(v) + 4);
+  g.textAlign = 'center';
+  for (let i = 0; i <= 4; i++) {
+    const t = from + (range / 4) * i;
+    g.fillText(new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), Math.min(Math.max(X(t), L + 20), w - R - 20), h - 10);
+  }
+  if (pts.length < 2) { g.fillText('Collecting data', w / 2, h / 2); return; }
+  g.fillStyle = 'rgba(255,77,61,.18)';
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p = pts[i];
+    if (p[3] && p[1] != null && p[1] <= -0.5) g.fillRect(X(p[0]), T, Math.max(1, X(pts[i + 1][0]) - X(p[0])), h - T - B);
+  }
+  g.fillStyle = 'rgba(238,240,242,.25)'; g.fillRect(L, Y(0), w - L - R, 1);
+  const line = (i, color, width) => {
+    const path = new Path2D();
+    let started = false;
+    for (const p of pts) {
+      if (p[i] == null) { started = false; continue; }
+      if (started) path.lineTo(X(p[0]), Y(p[i])); else path.moveTo(X(p[0]), Y(p[i]));
+      started = true;
+    }
+    g.strokeStyle = color; g.lineWidth = width; g.lineJoin = 'round'; g.stroke(path);
+  };
+  line(2, col('--ink'), 1.5);
+  line(1, col('--accent'), 2.5);
+  if (S.powerHoverX != null && S.powerHoverX > L) {
+    const t = from + ((S.powerHoverX - L) / (w - L - R)) * range;
+    let best = pts[0];
+    for (const p of pts) if (Math.abs(p[0] - t) < Math.abs(best[0] - t)) best = p;
+    const x = X(best[0]);
+    g.fillStyle = 'rgba(238,240,242,.35)'; g.fillRect(x - 0.5, T, 1.5, h - T - B);
+    g.font = `600 14px ${font}`;
+    const bw = best[1] == null ? 'battery –' : best[1] >= 0.5 ? `battery +${Math.round(best[1])} W` : best[1] <= -0.5 ? `battery −${Math.round(-best[1])} W` : 'battery 0 W';
+    const label = `${bw}  ${best[2] != null ? `processor ${Math.round(best[2])} W  ` : ''}${best[3] ? 'plugged in' : 'on battery'}  ${new Date(best[0]).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    const tw = g.measureText(label).width + 20;
+    const tx = Math.min(Math.max(x - tw / 2, L), w - R - tw);
+    g.fillStyle = col('--ink'); g.fillRect(tx, 2, tw, 26);
+    g.fillStyle = col('--on-accent'); g.textAlign = 'left'; g.fillText(label, tx + 10, 20);
+  }
 }
 
 function renderCare(b, hold) {
@@ -1038,6 +1148,7 @@ function renderSettings() {
       </div>
       <div class="ticks ${w.enabled ? '' : 'dim'}">${categories.map((k) => `<label><input type="checkbox" class="tick" data-wcat="${k.id}" ${w.cats.includes(k.id) ? 'checked' : ''}>${esc(k.title)}</label>`).join('')}</div>
       <p class="set-note" id="weeklyLine">${esc(weeklyLine())}</p>`),
+    block('Heat protection', `When the processor stays at 90 °C or more for 30 seconds, Shimmy turns CPU boost off until it cools to 75 °C for 2 minutes. Quiet: it shows on the Processor page and in the Log.`, sw('data-set="heat.enabled"', st.heat.enabled, 'Heat protection')),
     block('Start with Windows', 'Starts Shimmy in the tray when you sign in, with administrator rights and no prompt, through a Task Scheduler task. Works on battery too.', sw('data-autostart', startWithWindows, 'Start with Windows')),
     block('Big and duplicate files', 'Where the finder on the Clean page looks, and what it never offers. Code projects, Salon Shaila folders, hidden files and your Keep list are always left out.', '',
       `<div class="set-grid">${field('Count a file as large from', num('finder.largeMb', f.largeMb, 'MB', 50, 100000))}${field('Old caches: files untouched for', num('caches.ageDays', st.caches.ageDays, 'days', 1, 365))}</div>
@@ -1197,6 +1308,16 @@ document.addEventListener('click', async (e) => {
   }
   const folder = e.target.closest('[data-folder]');
   if (folder) return loadFolder(folder.dataset.folder);
+  const fanBtn = e.target.closest('[data-fan]');
+  if (fanBtn) {
+    fanBtn.disabled = true;
+    try {
+      const r = await api('/api/fan', { mode: fanBtn.dataset.fan });
+      S.state.fanMode = r.mode;
+      toast(`Fan mode: ${FAN_MODES.find((m) => m[0] === r.mode)?.[1] || r.mode}.`);
+    } catch (err) { toast(err.message, true); }
+    return renderFan();
+  }
   const lim = e.target.closest('[data-limit]');
   if (lim) return setLimit(Number(lim.dataset.limit));
   const dism = e.target.closest('[data-dism]');
@@ -1266,6 +1387,16 @@ document.addEventListener('change', async (e) => {
     e.target.checked ? S.finderSel.add(e.target.dataset.file) : S.finderSel.delete(e.target.dataset.file);
     return updateFinderBar();
   }
+  if (e.target.dataset && 'heat' in e.target.dataset) {
+    e.target.disabled = true;
+    try {
+      await api('/api/heat', { on: e.target.checked });
+      S.state.heat.enabled = e.target.checked;
+      if (!e.target.checked) S.state.heat.boostOff = false;
+      toast(e.target.checked ? 'Heat protection is on.' : 'Heat protection is off. Boost is on.');
+    } catch (err) { toast(err.message, true); }
+    return renderFan();
+  }
   if (e.target.dataset && 'hold' in e.target.dataset) {
     e.target.disabled = true;
     try {
@@ -1309,9 +1440,11 @@ $('#cpuChart').addEventListener('mousemove', (e) => { S.cpuHoverX = e.offsetX; d
 $('#cpuChart').addEventListener('mouseleave', () => { S.cpuHoverX = null; drawCpuChart(); });
 $('#wearChart').addEventListener('mousemove', (e) => { S.wearHoverX = e.offsetX; drawWearChart(); });
 $('#wearChart').addEventListener('mouseleave', () => { S.wearHoverX = null; drawWearChart(); });
+$('#powerChart').addEventListener('mousemove', (e) => { S.powerHoverX = e.offsetX; drawPowerChart(); });
+$('#powerChart').addEventListener('mouseleave', () => { S.powerHoverX = null; drawPowerChart(); });
 $('#gpuChart').addEventListener('mousemove', (e) => { S.gpuHoverX = e.offsetX; drawGpuChart(); });
 $('#gpuChart').addEventListener('mouseleave', () => { S.gpuHoverX = null; drawGpuChart(); });
-window.addEventListener('resize', () => { drawChart(); drawCpuChart(); drawGpuChart(); drawWearChart(); });
+window.addEventListener('resize', () => { drawChart(); drawCpuChart(); drawGpuChart(); drawWearChart(); drawPowerChart(); });
 
 let busy = false;
 async function refresh() {
