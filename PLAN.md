@@ -470,3 +470,17 @@ and `KMTQAITYPE_NODEPERFDATA` (Frequency, MaxFrequency), then `D3DKMTCloseAdapte
 `windows::Wdk::Graphics::Direct3D`, feature `Wdk_Graphics_Direct3D`. Not proven whether a query wakes a sleeping laptop dGPU:
 query a dedicated card only when PDH shows it in use, and only while the page is open. Keep NVML as the richer NVIDIA source.
 Missing fields show as unavailable, never 0. LibreHardwareMonitor has a single GPU switch (enabling it polls NVIDIA too).
+
+**Processor cores (Haiku), for 10c.** Three causes:
+1. **Clock:** cpu.rs reads LibreHardwareMonitor's non-effective `Core #N` clock. In the fixture that is 1373 MHz while
+   `Core #N (Effective)` is 51 MHz at 3.6 % load, so the headline and per-core GHz read far too high at idle. Use effective
+   clocks: per core `\Processor Information(0,N)\% Processor Performance` × base from PDH (vendor-neutral), with LHM's
+   `(Effective)` sensor as a cross-check; the average from the effective values.
+2. **Busy %:** four callers refresh the shared sysinfo `System` (the 3 s sampler, `get_state` via `home()` every 5 s and
+   every 1 s during scans, `get_battery`), so the sampling window can be a fraction of a second and the numbers are noisy.
+   Fix: only the sampler refreshes CPU usage, on a fixed interval; the others read cached values.
+3. **Pairing:** threads 2k and 2k+1 are assumed to be one core. That is wrong on Intel hybrid CPUs (E-cores have no SMT).
+   Use `GetLogicalProcessorInformationEx(RelationProcessorCore)` (GroupMask, `LTP_PC_SMT`, EfficiencyClass) for the real
+   mapping, with base clock per efficiency class.
+Also: drop per-core watts (`Core #N (SMU)` is 0.03–0.18 W, too coarse); keep package power. Update the cpu.rs test that
+asserts 1373 MHz.
