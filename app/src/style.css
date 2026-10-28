@@ -35,9 +35,11 @@ code { /* taste-skill-ignore */ font-family: Consolas, monospace; font-size: .85
 .brand { display: flex; align-items: center; gap: 10px; padding: 0 12px 32px; font-weight: 700; font-size: 20px; letter-spacing: -.03em; }
 .brand svg { width: 26px; height: 26px; color: var(--accent); }
 nav { display: grid; gap: 2px; }
-nav button { font: inherit; font-size: 16px; display: flex; align-items: center; gap: 12px; background: none; border: 0; color: var(--muted); padding: 10px 12px; cursor: pointer; text-align: left; transition: color .15s, background-color .15s; }
+nav button { position: relative; font: inherit; font-size: 16px; display: flex; align-items: center; gap: 12px; background: none; border: 0; color: var(--muted); padding: 10px 12px; cursor: pointer; text-align: left; transition: color .15s, background-color .15s; }
 nav button svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; stroke-linecap: round; flex: none; }
 nav button:hover { color: var(--ink); background: var(--s1); }
+nav .mark { position: absolute; top: 12px; right: 12px; width: 8px; height: 8px; background: var(--accent); }
+nav button.on .mark { background: var(--on-accent); }
 nav button.on { color: var(--on-accent); background: var(--ink); }
 .live { margin-top: auto; display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 14px; padding: 0 12px; }
 .live i { width: 8px; height: 8px; background: var(--muted); flex: none; }
@@ -322,6 +324,16 @@ dialog[open] { animation: rise .25s var(--ease); }
 .row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .set-note { margin: 0; color: var(--muted); }
 .dim { opacity: .45; }
+
+/* ---------- Updates ---------- */
+#updFacts { grid-template-columns: repeat(3, 1fr); }
+.notes { max-width: 72ch; }
+.notes p, .notes ul { margin: 0 0 12px; }
+.notes ul { padding-left: 22px; }
+.notes h4 { margin: 16px 0 6px; }
+#updBody .hold, #updBody .set-block, #updBody .warn-box { margin-top: 0; margin-bottom: 4px; }
+#updBody .meter { margin-top: 12px; }
+.hold .upd-acts { display: flex; gap: 4px; }
 
 /* ---------- Narrow window ---------- */
 @media (max-width: 1100px) {
