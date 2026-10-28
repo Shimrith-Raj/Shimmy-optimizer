@@ -12,7 +12,7 @@ const COMMANDS = {
   '/api/state': 'get_state', '/api/history': 'get_history', '/api/log': 'get_log', '/api/startup': 'get_startup',
   '/api/gpu': 'get_gpu', '/api/storage': 'get_storage', '/api/usage/scan': 'start_usage_scan', '/api/folder': 'storage_folder',
   '/api/open': 'open_path', '/api/clean': 'get_clean', '/api/clean/scan': 'start_clean_scan', '/api/clean/run': 'start_clean',
-  '/api/battery': 'get_battery', '/api/settings': 'get_settings', '/api/settings/save': 'set_settings', '/api/autostart': 'set_autostart', '/api/plugged': 'set_plugged_mode', '/api/caches/scan': 'start_cache_scan', '/api/caches/run': 'start_cache_clean', '/api/folder/preview': 'folder_preview', '/api/folder/delete': 'folder_delete', '/api/bin/empty': 'empty_bin', '/api/hibernation': 'set_hibernation', '/api/restore': 'get_restore_points', '/api/apps-settings': 'open_apps_settings', '/api/charge-limit': 'set_charge_limit', '/api/fan': 'set_fan_mode', '/api/heat': 'set_heat_protection', '/api/dism': 'start_dism', '/api/finder': 'start_finder', '/api/finder/delete': 'finder_delete', '/api/startup/toggle': 'toggle_startup', '/api/close': 'close_procs', '/api/trim': 'trim', '/api/quickclean': 'quick_clean',
+  '/api/battery': 'get_battery', '/api/settings': 'get_settings', '/api/settings/save': 'set_settings', '/api/autostart': 'set_autostart', '/api/plugged': 'set_plugged_mode', '/api/caches/scan': 'start_cache_scan', '/api/caches/run': 'start_cache_clean', '/api/folder/preview': 'folder_preview', '/api/folder/delete': 'folder_delete', '/api/bin/empty': 'empty_bin', '/api/hibernation': 'set_hibernation', '/api/restore': 'get_restore_points', '/api/apps-settings': 'open_apps_settings', '/api/charge-limit': 'set_charge_limit', '/api/fan': 'set_fan_mode', '/api/heat': 'set_heat_protection', '/api/dism': 'start_dism', '/api/finder': 'start_finder', '/api/finder/delete': 'finder_delete', '/api/startup/toggle': 'toggle_startup', '/api/close': 'close_procs', '/api/app-mark': 'set_app_mark', '/api/trim': 'trim', '/api/quickclean': 'quick_clean',
 };
 async function api(path, body) {
   try {
@@ -261,8 +261,14 @@ function renderRecs() {
     $('#recs').innerHTML = '<div class="empty">Nothing worth closing right now. Your memory is in good shape.</div>';
     return;
   }
+  const marks = S.state.marks || {};
+  const exeOf = new Map(S.state.groups.flatMap((g) => g.procs.map((p) => [p.pid, p.name.toLowerCase()])));
   $('#recs').innerHTML = recs.map((r, i) => {
-    const risk = r.action === 'info' ? '<span class="risk tip">Tip</span>' : `<span class="risk ${r.risk}">${r.risk === 'low' ? 'Safe' : 'Review first'}</span>`;
+    // Safe is only what you marked. Built-in low risk suggestions are just suggestions.
+    const marked = r.action === 'close' && r.pids.length > 0 && r.pids.every((pid) => marks[exeOf.get(pid)] === 'safe');
+    const risk = r.action === 'info' ? '<span class="risk tip">Tip</span>'
+      : marked ? '<span class="risk low">Safe</span>'
+      : `<span class="risk ${r.risk === 'low' ? 'tip' : r.risk}">${r.risk === 'low' ? 'Suggested' : 'Review first'}</span>`;
     const btn = r.action === 'close' ? `<button class="btn small ghost" data-rec="${i}">Review and close</button>`
       : r.action === 'trim' ? '<button class="btn small ghost" data-trim>Trim memory</button>' : '';
     const save = r.savingsMB ? `<div class="save">${fmt(r.savingsMB)}</div>` : '<div class="save none">Advice</div>';
@@ -309,7 +315,7 @@ function renderCpu() {
 
   const top = S.state.groups.filter((g) => g.cpu >= 0.5).sort((a, b) => b.cpu - a.cpu).slice(0, 6);
   $('#cpuTop').innerHTML = top.length ? top.map((g) => {
-    const act = g.protected ? `<span class="lock">Protected, ${esc(g.reason)}</span>` : `<button class="btn small ghost" data-close-app="${esc(g.app)}">Close</button>`;
+    const act = g.protected ? `<span class="lock">${esc(lockText(g))}</span>` : `<button class="btn small ghost" data-close-app="${esc(g.app)}">Close</button>`;
     return `<div class="rec"><div class="save">${g.cpu.toFixed(1)}%</div><div><div class="t">${esc(g.app)}</div><p class="w">${g.count} process${g.count === 1 ? '' : 'es'}, ${fmt(g.mb)} of memory</p></div><div class="act">${act}</div></div>`;
   }).join('') : '<div class="empty">Nothing is using the processor right now.</div>';
   drawCpuChart();
@@ -968,6 +974,42 @@ function drawWearChart() {
 
 // ---------- Apps ----------
 
+const lockText = (x) => `Protected, ${x.reason === 'You marked it protected' ? 'you marked it' : x.reason}`;
+const MARK_WORDS = { default: 'Default', safe: 'Safe', protected: 'Protected' };
+const MARK_TIPS = {
+  default: 'Clean now only trims it. It is never closed automatically.',
+  safe: 'Clean now and the automatic clean may close it, even with no window.',
+  protected: 'Never closed and never trimmed, even by hand.',
+};
+
+// The exe names a group's mark applies to. Processes protected for a built-in reason cannot be marked.
+const groupExes = (g) => [...new Set(g.procs.filter((p) => !p.builtin).map((p) => p.name.toLowerCase()))];
+
+function groupMark(g) {
+  const marks = S.state.marks || {};
+  const set = new Set(groupExes(g).map((e) => marks[e] || 'default'));
+  return set.size === 1 ? [...set][0] : 'mixed';
+}
+
+function markControl(g) {
+  const cur = groupMark(g);
+  const chips = Object.keys(MARK_WORDS).map((m) => `<button class="${cur === m ? 'on' : ''}" data-mark="${m}" data-mark-app="${esc(g.app)}" title="${esc(MARK_TIPS[m])}">${MARK_WORDS[m]}</button>`).join('');
+  return `<span class="chips mark" role="group" aria-label="Mark ${esc(g.app)}">${chips}</span>${cur === 'mixed' ? '<span class="mark-mixed">Mixed</span>' : ''}`;
+}
+
+async function setMark(exes, mark) {
+  try {
+    const r = await api('/api/app-mark', { exes, mark });
+    S.state.marks = r.marks;
+    if (S.cfg) S.cfg.settings.appMarks = r.marks;
+    toast(mark === 'default' ? 'Back to the default. Clean now only trims it.'
+      : mark === 'safe' ? 'Marked Safe. Clean now and the automatic clean may close it.'
+      : 'Marked Protected. It will not be closed or trimmed.');
+  } catch (e) { toast(e.message, true); }
+  if (S.state) { renderApps(); renderRecs(); }
+  if (S.tab === 'settings' && S.cfg) renderSettings();
+}
+
 function renderApps() {
   const q = S.filter.toLowerCase();
   const groups = S.state.groups.filter((g) => !q || g.app.toLowerCase().includes(q) || g.procs.some((p) => p.name.toLowerCase().includes(q) || p.title.toLowerCase().includes(q)));
@@ -976,10 +1018,11 @@ function renderApps() {
   for (const g of groups) {
     const open = S.open.has(g.app);
     const ids = g.procs.filter((p) => !p.protected).map((p) => p.pid);
-    const lock = g.protected ? `<span class="lock" title="This is never offered for closing">Protected, ${esc(g.reason)}</span>` : g.reason ? '<span class="lock" title="Protected processes in this group are skipped">Partly protected</span>' : '';
-    rows.push(`<tr class="group ${open ? 'open' : ''}" data-app="${esc(g.app)}"><td><span class="caret">▸</span></td><td><b>${esc(g.app)}</b>${lock}</td><td class="num">${g.count}</td><td class="num">${fmt(g.mb)}</td><td class="bar-col"><div class="meter"><i style="width:${(g.mb / max) * 100}%"></i></div></td><td class="num">${ids.length ? `<button class="btn small ghost" data-close-app="${esc(g.app)}">Close</button>` : ''}</td></tr>`);
+    const lock = g.builtin ? `<span class="lock" title="This is never offered for closing">${esc(lockText(g))}</span>` : g.protected ? '' : g.reason ? '<span class="lock" title="Protected processes in this group are skipped">Partly protected</span>' : '';
+    const mark = g.builtin ? '' : markControl(g);
+    rows.push(`<tr class="group ${open ? 'open' : ''}" data-app="${esc(g.app)}"><td><span class="caret">▸</span></td><td><b>${esc(g.app)}</b>${lock}</td><td class="num">${g.count}</td><td class="num">${fmt(g.mb)}</td><td class="bar-col"><div class="meter"><i style="width:${(g.mb / max) * 100}%"></i></div></td><td class="num"><span class="mark-cell">${mark}${ids.length ? `<button class="btn small ghost" data-close-app="${esc(g.app)}">Close</button>` : ''}</span></td></tr>`);
     if (open) for (const p of g.procs) {
-      rows.push(`<tr class="child"><td></td><td>${esc(p.name)} <span class="muted">pid ${p.pid}</span>${p.title ? `, ${esc(p.title)}` : ''}${p.cmd ? `<div class="cmd">${esc(p.cmd)}</div>` : ''}</td><td></td><td class="num">${p.mb} MB</td><td class="bar-col"></td><td class="num">${p.protected ? `<span class="lock">Protected, ${esc(p.reason)}</span>` : `<button class="btn small ghost" data-close-pid="${p.pid}" data-app="${esc(g.app)}">Close</button>`}</td></tr>`);
+      rows.push(`<tr class="child"><td></td><td>${esc(p.name)} <span class="muted">pid ${p.pid}</span>${p.title ? `, ${esc(p.title)}` : ''}${p.cmd ? `<div class="cmd">${esc(p.cmd)}</div>` : ''}</td><td></td><td class="num">${p.mb} MB</td><td class="bar-col"></td><td class="num">${p.protected ? `<span class="lock">${esc(lockText(p))}</span>` : `<button class="btn small ghost" data-close-pid="${p.pid}" data-app="${esc(g.app)}">Close</button>`}</td></tr>`);
     }
   }
   $('#appsTable tbody').innerHTML = rows.join('') || '<tr><td colspan="6" class="muted">No matches.</td></tr>';
@@ -1052,8 +1095,8 @@ const quickClean = () => busyButton('.clean-btn', 'Cleaning', async () => {
   const freed = `${r.freedMB >= 0 ? 'Freed' : 'Changed by'} ${fmt(Math.abs(r.freedMB))}.`;
   toast(r.closedApps.length
     ? `${freed} Closed ${r.closedApps.join(', ')} and trimmed ${r.trimmed} apps.`
-    : `${freed} Nothing idle to close, so ${r.trimmed} apps were trimmed.`);
-  if (r.skippedApps.length) toast(`Left open because it has a window: ${r.skippedApps.join(', ')}. Use What to close if you want it gone.`);
+    : `${freed} No app is marked Safe to close, so ${r.trimmed} apps were trimmed.`);
+  if (r.skippedApps.length) toast(`Still open after Shimmy asked: ${r.skippedApps.join(', ')}. It may be waiting on a save prompt or sitting in the tray.`);
 });
 
 // ---------- Graphics ----------
@@ -1101,7 +1144,7 @@ async function loadGpuPage() {
   const groups = S.state?.groups || [];
   $('#gpuApps').innerHTML = r.apps.length ? r.apps.map((a) => {
     const grp = groups.find((x) => x.procs.some((p) => p.pid === a.pid));
-    const act = !grp ? '' : grp.protected ? `<span class="lock">Protected, ${esc(grp.reason)}</span>` : `<button class="btn small ghost" data-close-app="${esc(grp.app)}">Close</button>`;
+    const act = !grp ? '' : grp.protected ? `<span class="lock">${esc(lockText(grp))}</span>` : `<button class="btn small ghost" data-close-app="${esc(grp.app)}">Close</button>`;
     return `<div class="rec"><div class="save">${a.pct.toFixed(a.pct < 10 ? 1 : 0)}%</div><div><div class="t">${esc(grp?.app || a.app)}</div><p class="w">${esc(a.adapter)}, ${esc(a.engine === '3D' ? a.engine : a.engine.toLowerCase())}</p></div><div class="act">${act}</div></div>`;
   }).join('') : '<div class="empty">No app is using graphics right now.</div>';
 
@@ -1147,6 +1190,7 @@ function weeklyLine() {
 function renderSettings() {
   const { settings: st, defaultRoots, categories, startWithWindows } = S.cfg;
   const a = st.alerts, c = st.autoClean, w = st.weekly, f = st.finder;
+  const marked = Object.entries(st.appMarks || {}).sort((x, y) => x[0].localeCompare(y[0]));
   const block = (title, text, head, body) => `<div class="set-block"><div class="set-head"><div><h3>${title}</h3><p>${text}</p></div>${head || ''}</div>${body || ''}</div>`;
   const field = (label, input) => `<label class="field"><span>${label}</span>${input}</label>`;
   $('#settings').innerHTML = [
@@ -1164,7 +1208,7 @@ function renderSettings() {
       </div>
       <div class="limits two ${c.enabled ? '' : 'dim'}">
         <button data-level="trim" class="${c.level === 'trim' ? 'on' : ''}"><b>Trim</b><span>Asks every app to give back idle memory. Closes nothing.</span></button>
-        <button data-level="clean" class="${c.level === 'clean' ? 'on' : ''}"><b>Clean now</b><span>Also closes idle background apps marked safe. Anything with a window stays open.</span></button>
+        <button data-level="clean" class="${c.level === 'clean' ? 'on' : ''}"><b>Clean now</b><span>Also closes the apps you marked Safe. Protected apps are never closed or trimmed.</span></button>
       </div>`),
     block('Weekly clean', 'Clears temporary files and caches once a week, the same as the Clean page. Browser caches are skipped while that browser is open.', sw('data-set="weekly.enabled"', w.enabled, 'Weekly clean'),
       `<div class="set-grid ${w.enabled ? '' : 'dim'}">
@@ -1173,6 +1217,8 @@ function renderSettings() {
       </div>
       <div class="ticks ${w.enabled ? '' : 'dim'}">${categories.map((k) => `<label><input type="checkbox" class="tick" data-wcat="${k.id}" ${w.cats.includes(k.id) ? 'checked' : ''}>${esc(k.title)}</label>`).join('')}</div>
       <p class="set-note" id="weeklyLine">${esc(weeklyLine())}</p>`),
+    block('Marked apps', 'Safe apps are closed by Clean now and by the automatic clean, even when they have no window. Protected apps are never closed or trimmed, not even by hand. Every other app is only trimmed. Mark apps on the Apps page.', '',
+      `<div class="rows">${marked.map(([exe, m]) => `<div class="row"><span>${esc(exe)} <span class="muted">${esc(MARK_WORDS[m] || m)}</span></span><button class="btn small ghost" data-rm-mark="${esc(exe)}">Remove</button></div>`).join('') || '<div class="row"><span class="muted">No apps marked yet.</span></div>'}</div>`),
     block('Heat protection', `When the processor stays at 90 °C or more for 30 seconds, Shimmy turns CPU boost off until it cools to 75 °C for 2 minutes. Quiet: it shows on the Processor page and in the Log.`, sw('data-set="heat.enabled"', st.heat.enabled, 'Heat protection')),
     block('Start with Windows', 'Starts Shimmy in the tray when you sign in, with administrator rights and no prompt, through a Task Scheduler task. Works on battery too.', sw('data-autostart', startWithWindows, 'Start with Windows')),
     block('About', 'Shimmy Optimizer, founded and built by Shimrith Raj. Open source under the MIT licence. The terms of use and the licences of the parts it includes are in the legal folder where Shimmy is installed.'),
@@ -1244,6 +1290,7 @@ $('#settings').addEventListener('click', (e) => {
   if (!b) return;
   const f = S.cfg.settings.finder;
   if (b.dataset.level) { S.cfg.settings.autoClean.level = b.dataset.level; return saveSettings(true); }
+  if (b.dataset.rmMark) return setMark([b.dataset.rmMark], 'default');
   if (b.dataset.rmRoot != null) { f.extraRoots.splice(Number(b.dataset.rmRoot), 1); return saveSettings(true); }
   if (b.dataset.rmExcl != null) { f.exclusions.splice(Number(b.dataset.rmExcl), 1); return saveSettings(true); }
   const add = (input, list) => {
@@ -1384,6 +1431,10 @@ document.addEventListener('click', async (e) => {
     const r = S.state.recs[Number(t.dataset.rec)];
     const procs = S.state.groups.flatMap((g) => g.procs);
     return openClose(r.title, r.pids.map((pid) => procs.find((p) => p.pid === pid)).filter(Boolean), 'auto', r.risk === 'review' ? r.why : '');
+  }
+  if (t.dataset.mark) {
+    const g = S.state.groups.find((x) => x.app === t.dataset.markApp);
+    return g && setMark(groupExes(g), t.dataset.mark);
   }
   if (t.dataset.closeApp) {
     e.stopPropagation();

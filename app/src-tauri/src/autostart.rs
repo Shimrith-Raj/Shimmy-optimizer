@@ -1,26 +1,48 @@
 //! Start with Windows through a Task Scheduler task with highest privileges, so the elevated app starts at sign-in
 //! without a UAC prompt (tested in Phase 0). Default task settings refuse to start on battery, so both battery
 //! settings are turned off here.
-use std::os::windows::process::CommandExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use windows::core::BSTR;
+use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
+use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED};
+use windows::Win32::System::TaskScheduler::{ITaskFolder, ITaskService, TaskScheduler, TASK_CREATE_OR_UPDATE, TASK_LOGON_INTERACTIVE_TOKEN};
+use windows::Win32::System::Variant::VARIANT;
 
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 pub const TASK: &str = "Shimmy Optimizer";
 /// Passed by the task so Shimmy starts in the tray instead of opening its window.
 pub const TRAY_ARG: &str = "--tray";
 
-fn schtasks(args: &[&str]) -> Result<String, String> {
-  let out = Command::new("schtasks.exe").args(args).stdin(Stdio::null()).creation_flags(CREATE_NO_WINDOW).output().map_err(|e| e.to_string())?;
-  if out.status.success() {
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-  } else {
-    Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+/// Balances CoInitializeEx. When the thread already has COM in another mode, that is left as it is.
+struct Com(bool);
+
+impl Drop for Com {
+  fn drop(&mut self) {
+    if self.0 {
+      unsafe { CoUninitialize() };
+    }
   }
 }
 
+/// Runs `f` on the root folder of the local Task Scheduler. The COM objects are released before COM is torn down.
+fn with_root<T>(f: impl FnOnce(&ITaskFolder) -> windows::core::Result<T>) -> Result<T, String> {
+  let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+  if hr.is_err() && hr != RPC_E_CHANGED_MODE {
+    return Err(windows::core::Error::from(hr).message());
+  }
+  let _com = Com(hr.is_ok());
+  let run = || -> windows::core::Result<T> {
+    unsafe {
+      let service: ITaskService = CoCreateInstance(&TaskScheduler, None, CLSCTX_INPROC_SERVER)?;
+      let none = VARIANT::default();
+      service.Connect(&none, &none, &none, &none)?;
+      f(&service.GetFolder(&BSTR::from("\\"))?)
+    }
+  };
+  run().map_err(|e| e.message())
+}
+
 pub fn enabled() -> bool {
-  schtasks(&["/Query", "/TN", TASK]).is_ok()
+  with_root(|root| unsafe { root.GetTask(&BSTR::from(TASK)).map(|_| ()) }).is_ok()
 }
 
 fn xml_escape(s: &str) -> String {
@@ -51,7 +73,7 @@ pub fn task_xml(exe: &Path, user: &str) -> String {
 
 pub fn set(on: bool) -> Result<(), String> {
   if !on {
-    return if enabled() { schtasks(&["/Delete", "/TN", TASK, "/F"]).map(|_| ()) } else { Ok(()) };
+    return if enabled() { with_root(|root| unsafe { root.DeleteTask(&BSTR::from(TASK), 0) }) } else { Ok(()) };
   }
   let exe = std::env::current_exe().map_err(|e| e.to_string())?;
   let user = match (std::env::var("USERDOMAIN"), std::env::var("USERNAME")) {
@@ -59,14 +81,11 @@ pub fn set(on: bool) -> Result<(), String> {
     (_, Ok(u)) => u,
     _ => return Err("Could not tell which Windows user is signed in.".into()),
   };
-  // schtasks reads task XML as UTF-16.
-  let path = std::env::temp_dir().join(format!("shimmy-task-{}.xml", std::process::id()));
-  let mut bytes = vec![0xFF, 0xFE];
-  bytes.extend(task_xml(&exe, &user).encode_utf16().flat_map(|u| u.to_le_bytes()));
-  std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
-  let r = schtasks(&["/Create", "/TN", TASK, "/XML", &path.to_string_lossy(), "/F"]);
-  let _ = std::fs::remove_file(&path);
-  r.map(|_| ())
+  let xml = BSTR::from(task_xml(&exe, &user));
+  with_root(|root| unsafe {
+    let none = VARIANT::default();
+    root.RegisterTask(&BSTR::from(TASK), &xml, TASK_CREATE_OR_UPDATE.0, &none, &none, TASK_LOGON_INTERACTIVE_TOKEN, &none).map(|_| ())
+  })
 }
 
 #[cfg(test)]

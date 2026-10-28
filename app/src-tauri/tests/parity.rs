@@ -2,7 +2,7 @@
 //! Regenerate the fixture with `node tools/make-fixture.js` (it runs v0.2's own code).
 use serde::Deserialize;
 use serde_json::{json, Value};
-use shimmy_lib::procs::{build_groups, classify, recommend, Mem, Proc};
+use shimmy_lib::procs::{build_groups, classify, recommend, Marks, Mem, Proc};
 use std::collections::HashSet;
 
 #[derive(Deserialize)]
@@ -26,7 +26,7 @@ fn compare(kind: &str, got: &[Value], want: &[Value]) {
 fn groups_and_suggestions_match_v02() {
   let snap = snapshot();
   let expected: Value = serde_json::from_str(include_str!("fixtures/expected.json")).unwrap();
-  let groups = build_groups(&snap.procs, &HashSet::new());
+  let groups = build_groups(&snap.procs, &HashSet::new(), &Marks::new());
   let recs = recommend(&snap.procs, &groups, &snap.mem);
 
   let got_groups: Vec<Value> = groups
@@ -55,7 +55,7 @@ fn elevated_mode_protections() {
     (proc(903, "PhoneExperienceHost.exe", "", Some(1)), None),
   ];
   for (p, want) in cases {
-    let c = classify(&p, &own);
+    let c = classify(&p, &own, &Marks::new());
     assert_eq!(c.reason.as_deref(), want, "{}", p.name);
     assert_eq!(c.protected, want.is_some(), "{}", p.name);
   }

@@ -10,6 +10,15 @@ using System.Text;
 using System.Threading;
 using LibreHardwareMonitor.Hardware;
 
+// Version resource of the exe, so Windows shows who made it and what it does.
+[assembly: AssemblyTitle("Shimmy sensor reader")]
+[assembly: AssemblyDescription("Reads CPU, battery and drive sensors for Shimmy Optimizer")]
+[assembly: AssemblyCompany("Shimrith Raj")]
+[assembly: AssemblyProduct("Shimmy Optimizer")]
+[assembly: AssemblyCopyright("Copyright (c) 2026 Shimrith Raj")]
+[assembly: AssemblyVersion("0.5.0.0")]
+[assembly: AssemblyFileVersion("0.5.0.0")]
+
 static class ShimmySensors
 {
   static string dir;

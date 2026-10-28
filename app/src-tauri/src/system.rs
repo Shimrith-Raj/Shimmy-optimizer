@@ -145,10 +145,13 @@ pub fn close(pids: &[u32], force: bool) -> Vec<u32> {
   pids.iter().copied().filter(|&p| alive(p)).collect()
 }
 
-/// Empties the working set of every process it can open. Returns how many were trimmed.
-pub fn trim_all(sys: &System) -> u32 {
+/// Empties the working set of every process it can open, except those in `skip`. Returns how many were trimmed.
+pub fn trim_all(sys: &System, skip: &HashSet<u32>) -> u32 {
   let mut n = 0;
   for pid in sys.processes().keys() {
+    if skip.contains(&pid.as_u32()) {
+      continue;
+    }
     unsafe {
       if let Ok(h) = OpenProcess(PROCESS_SET_QUOTA | PROCESS_QUERY_LIMITED_INFORMATION, false, pid.as_u32()) {
         if EmptyWorkingSet(h).is_ok() {

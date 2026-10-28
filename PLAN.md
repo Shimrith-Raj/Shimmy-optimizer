@@ -484,3 +484,20 @@ Missing fields show as unavailable, never 0. LibreHardwareMonitor has a single G
    mapping, with base clock per efficiency class.
 Also: drop per-core watts (`Core #N (SMU)` is 0.03–0.18 W, too coarse); keep package power. Update the cpu.rs test that
 asserts 1373 MHz.
+
+### 10a built (2026-10-28, v0.5.0)
+- **Safe marks** (`procs.rs` `Mark`, `clean_plan`, `trim_skip`; `set_app_mark` command; `Settings.app_marks`, kept by
+  Shimmy). Protected: never closed, never trimmed. Safe: Clean now and the automatic clean close it (force if it has no
+  window, a polite close if it has one). Default: never closed automatically, only trimmed. Built-in low-risk suggestions
+  are no longer auto-closed. Built-in protected apps cannot be marked Safe. Controls on the Apps page, a Marked apps list in
+  Settings, corrected copy. 14 new tests.
+- **Build fixes**: sensor reader with name, company and version; installer CompanyName; PawnIO installed only when its
+  service is missing, with its exit code reported; Delivery Optimization cache deleted directly instead of hidden
+  PowerShell; Windows Update service stopped and started through the Service Control Manager instead of `net.exe`; the
+  sign-in task registered through the Task Scheduler COM API instead of a temp XML and `schtasks.exe`.
+- Checked on this PC: fresh install, the task created through COM, upgrade over 0.5.0 with "Uninstall before installing".
+- **Upgrade note:** the installer finds the old install through `HKLM\Software\<publisher>\Shimmy Optimizer`. Builds up to
+  0.4.0 used publisher `shimmy`, 0.4.1 and later use `Shimrith Raj`, so upgrading straight from 0.4.0 or older fails with
+  "Error launching installer". Uninstall the old version first. Public releases started at 0.4.1, so users are not affected.
+  Never change `bundle.publisher` again.
+- 48 tests pass (46 lib, 2 parity). Still unsigned: signing and the Microsoft false-positive report need the owner.

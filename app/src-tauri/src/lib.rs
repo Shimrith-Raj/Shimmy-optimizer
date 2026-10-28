@@ -18,7 +18,7 @@ pub mod store;
 pub mod system;
 pub mod tray;
 
-use procs::{build_groups, classify, recommend};
+use procs::{build_groups, classify, recommend, Marks};
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -93,6 +93,9 @@ struct Settings {
   heat: heat::HeatPrefs,
   /// The user accepted the warning that ASUS firmware writes were not tested on this model. Kept by Shimmy.
   asus_untested_ok: bool,
+  /// Per-app marks by lower-case exe name (procs.rs). Changed only by `set_app_mark`; kept by Shimmy.
+  #[serde(deserialize_with = "procs::lenient_marks")]
+  app_marks: Marks,
 }
 
 /// Starts the error a firmware write returns on an untested model before the user's OK; the page shows the warning.
@@ -260,6 +263,11 @@ impl Shared {
     system::compact_self();
   }
 
+  /// The user's per-app marks.
+  fn marks(&self) -> Marks {
+    self.settings.lock().unwrap().app_marks.clone()
+  }
+
   /// Lower-case names of running processes, fresh.
   fn running(&self) -> HashSet<String> {
     let mut sys = self.sys.lock().unwrap();
@@ -331,42 +339,52 @@ fn close_impl(s: &Shared, targets: Vec<procs::Proc>, force: bool) -> Value {
   })
 }
 
+/// Trims every app's memory except protected ones: built-in protected processes and apps marked Protected.
 fn trim_impl(s: &Shared) -> Value {
+  let marks = s.marks();
   let before = free_bytes();
-  let n = system::trim_all(&s.sys.lock().unwrap());
+  let (n, left) = {
+    let mut sys = s.sys.lock().unwrap();
+    let procs_now = system::list_procs(&mut sys);
+    let skip = procs::trim_skip(&procs_now, &system::own_pids(&procs_now), &marks);
+    (system::trim_all(&sys, &skip), skip.len())
+  };
   std::thread::sleep(Duration::from_millis(1000));
   let freed = mb_of(free_bytes() - before);
-  s.store.log("trim-working-sets", "all processes", &format!("{n} processes trimmed, {freed} MB change in available memory"));
+  s.store.log("trim-working-sets", "all but protected", &format!("{n} processes trimmed, {left} protected left alone, {freed} MB change in available memory"));
   json!({ "trimmed": n, "freedMB": freed })
 }
 
-/// Closes only "safe" suggestions whose processes are all windowless, then trims. Shared by the button and the tray.
+/// Closes only the apps marked Safe (never a protected one), then trims the rest. An app with a window is asked to
+/// close and may stay open; one without a window is ended. Shared by the buttons, the tray and the automatic clean.
 fn quick_clean_impl(s: &Shared) -> Value {
+  let marks = s.marks();
   let procs_now = system::list_procs(&mut s.sys.lock().unwrap());
   let own = system::own_pids(&procs_now);
-  let groups = build_groups(&procs_now, &own);
+  let plan = procs::clean_plan(&procs_now, &own, &marks);
   let before = free_bytes();
-  let (mut targets, mut closed_apps, mut skipped_apps) = (Vec::new(), Vec::new(), Vec::new());
-  for r in recommend(&procs_now, &groups, &system::mem_now()) {
-    if r.action != "close" || r.risk != "low" {
-      continue;
-    }
-    let list: Vec<procs::Proc> = procs_now.iter().filter(|p| r.pids.contains(&p.pid) && !classify(p, &own).protected).cloned().collect();
+  let (mut targets, mut closed, mut left) = (Vec::new(), 0u64, HashSet::new());
+  for (list, force) in [(plan.force, true), (plan.ask, false)] {
     if list.is_empty() {
       continue;
     }
-    let app = r.app.unwrap_or(r.title);
-    if list.iter().any(|p| !p.title.is_empty()) {
-      skipped_apps.push(app);
-      continue;
-    }
-    targets.extend(list);
-    closed_apps.push(app);
+    targets.extend(list.iter().cloned());
+    let r = close_impl(s, list, force);
+    closed += r["closed"].as_u64().unwrap_or(0);
+    left.extend(r["remaining"].as_array().into_iter().flatten().filter_map(|x| x["pid"].as_u64()).map(|x| x as u32));
   }
-  let closed = if targets.is_empty() { json!({ "closed": 0 }) } else { close_impl(s, targets, true) };
+  let (mut closed_apps, mut skipped_apps) = (Vec::new(), Vec::new());
+  for p in &targets {
+    let list = if left.contains(&p.pid) { &mut skipped_apps } else { &mut closed_apps };
+    let a = procs::app_of(p);
+    if !list.contains(&a) {
+      list.push(a);
+    }
+  }
+  closed_apps.retain(|a| !skipped_apps.contains(a));
   let trim = trim_impl(s);
   json!({
-    "closedApps": closed_apps, "skippedApps": skipped_apps, "closed": closed["closed"], "trimmed": trim["trimmed"],
+    "closedApps": closed_apps, "skippedApps": skipped_apps, "closed": closed, "trimmed": trim["trimmed"],
     "freedMB": mb_of(free_bytes() - before), "mem": system::mem_now(),
   })
 }
@@ -377,10 +395,11 @@ fn quick_clean_impl(s: &Shared) -> Value {
 async fn get_state(s: State<'_, Shr>) -> Result<Value, String> {
   let s = s.inner().clone();
   tauri::async_runtime::spawn_blocking(move || {
+    let marks = s.marks();
     let mut sys = s.sys.lock().unwrap();
     let procs_now = system::list_procs(&mut sys);
     let own = system::own_pids(&procs_now);
-    let groups = build_groups(&procs_now, &own);
+    let groups = build_groups(&procs_now, &own, &marks);
     let mem = system::mem_now();
     let recs = recommend(&procs_now, &groups, &mem);
     let home = system::home(&mut sys);
@@ -399,7 +418,7 @@ async fn get_state(s: State<'_, Shr>) -> Result<Value, String> {
     let heat = s.settings.lock().unwrap().heat.clone();
     let heat = json!({ "enabled": heat.enabled, "boostOff": heat.saved.is_some(), "since": heat.saved.map(|b| b.since), "hotC": heat::HOT_C, "coolC": heat::COOL_C });
     let fan_mode = s.atk.as_ref().and_then(|a| a.fan_mode());
-    json!({ "mem": mem, "groups": groups, "recs": recs, "home": home, "cpu": cpu, "batteryHealth": battery_health, "plugged": plugged, "selfMB": self_mb, "fanMode": fan_mode, "heat": heat, "at": store::now_ms() })
+    json!({ "mem": mem, "groups": groups, "marks": marks, "recs": recs, "home": home, "cpu": cpu, "batteryHealth": battery_health, "plugged": plugged, "selfMB": self_mb, "fanMode": fan_mode, "heat": heat, "at": store::now_ms() })
   })
   .await
   .map_err(|e| e.to_string())
@@ -462,6 +481,7 @@ fn toggle_startup(s: State<'_, Shr>, name: String, sub: String, scope: String, e
 #[tauri::command]
 async fn close_procs(s: State<'_, Shr>, pids: Vec<u32>, mode: String) -> Result<Value, String> {
   exclusive(s.inner(), move |s| {
+    let marks = s.marks();
     let mut want: Vec<u32> = pids.into_iter().filter(|p| *p > 4).collect();
     want.dedup();
     want.truncate(500);
@@ -472,7 +492,7 @@ async fn close_procs(s: State<'_, Shr>, pids: Vec<u32>, mode: String) -> Result<
       match procs_now.iter().find(|p| p.pid == *pid) {
         None => skipped.push(json!({ "pid": pid, "reason": "already gone" })),
         Some(p) => {
-          let c = classify(p, &own);
+          let c = classify(p, &own, &marks);
           if c.protected {
             skipped.push(json!({ "pid": pid, "name": p.name, "reason": format!("protected ({})", c.reason.unwrap_or_default()) }));
           } else {
@@ -1062,6 +1082,7 @@ async fn set_settings(s: State<'_, Shr>, settings: Value) -> Result<Value, Strin
       new.plugged = cur.plugged.clone();
       new.heat.saved = cur.heat.saved.clone();
       new.asus_untested_ok = cur.asus_untested_ok;
+      new.app_marks = cur.app_marks.clone();
       new.weekly.last_run = cur.weekly.last_run;
       // Turning the weekly clean on, or moving it, counts from now, so a slot already in the past does not fire at once.
       let w = &new.weekly;
@@ -1072,6 +1093,43 @@ async fn set_settings(s: State<'_, Shr>, settings: Value) -> Result<Value, Strin
     }
     s.save_settings();
     Ok(settings_json(&s))
+  })
+  .await
+  .map_err(|e| e.to_string())?
+}
+
+/// Marks apps by exe name: "protected", "safe", or "default" to remove the mark. Safe is refused for anything Shimmy
+/// protects for a built-in reason.
+#[tauri::command]
+async fn set_app_mark(s: State<'_, Shr>, exes: Vec<String>, mark: String) -> Result<Value, String> {
+  let s = s.inner().clone();
+  tauri::async_runtime::spawn_blocking(move || {
+    let mark = procs::parse_mark(&mark)?;
+    // Running processes by exe name: (all protected for a built-in reason, why). Checked besides the name itself,
+    // because a service or a client-work process is protected by where it runs, not by its name.
+    let mut running: HashMap<String, (bool, Option<String>)> = HashMap::new();
+    if mark == Some(procs::Mark::Safe) {
+      let procs_now = system::list_procs(&mut s.sys.lock().unwrap());
+      let own = system::own_pids(&procs_now);
+      for p in &procs_now {
+        let c = classify(p, &own, &Marks::new());
+        let e = running.entry(p.name.to_lowercase()).or_insert((true, None));
+        e.0 &= c.builtin;
+        e.1 = e.1.take().or(c.reason);
+      }
+    }
+    let blocked = |k: &str| procs::builtin_reason(k).or_else(|| running.get(k).filter(|e| e.0).and_then(|e| e.1.clone()));
+    let changed = procs::set_marks(&mut s.settings.lock().unwrap().app_marks, &exes, mark, blocked)?;
+    s.save_settings();
+    let detail = match mark {
+      Some(procs::Mark::Safe) => "safe: Clean now and the automatic clean may close it",
+      Some(procs::Mark::Protected) => "protected: never closed and never trimmed",
+      None => "default: only trimmed, never closed automatically",
+    };
+    for k in &changed {
+      s.store.log("app-mark", k, detail);
+    }
+    Ok(json!({ "marks": s.marks() }))
   })
   .await
   .map_err(|e| e.to_string())?
@@ -1145,12 +1203,12 @@ fn tray_clean(app: AppHandle, trim_only: bool, auto: bool) {
     let mut body = if trim_only {
       format!("Trimmed {trimmed} apps. Nothing was closed.")
     } else if list("closedApps").is_empty() {
-      format!("Nothing idle to close. Trimmed {trimmed} apps.")
+      format!("No apps are marked Safe to close. Trimmed {trimmed} apps.")
     } else {
       format!("Closed {}. Trimmed {trimmed} apps.", list("closedApps"))
     };
     if !list("skippedApps").is_empty() {
-      body += &format!(" Left open (has a window): {}.", list("skippedApps"));
+      body += &format!(" Still open after Shimmy asked: {}.", list("skippedApps"));
     }
     notify(&app, &title, &body);
     let _ = app.emit("refresh", ());
@@ -1386,7 +1444,7 @@ pub fn run() {
         std::thread::spawn(move || s.release());
       }
     })
-    .invoke_handler(tauri::generate_handler![get_state, get_history, get_gpu, get_storage, start_usage_scan, storage_folder, open_path, get_clean, start_clean_scan, start_clean, start_dism, start_finder, finder_delete, get_battery, set_charge_limit, set_fan_mode, set_heat_protection, get_settings, set_settings, set_autostart, set_plugged_mode, start_cache_scan, start_cache_clean, folder_preview, folder_delete, empty_bin, set_hibernation, get_restore_points, open_apps_settings, get_log, get_startup, toggle_startup, close_procs, trim, quick_clean])
+    .invoke_handler(tauri::generate_handler![get_state, get_history, get_gpu, get_storage, start_usage_scan, storage_folder, open_path, get_clean, start_clean_scan, start_clean, start_dism, start_finder, finder_delete, get_battery, set_charge_limit, set_fan_mode, set_heat_protection, get_settings, set_settings, set_app_mark, set_autostart, set_plugged_mode, start_cache_scan, start_cache_clean, folder_preview, folder_delete, empty_bin, set_hibernation, get_restore_points, open_apps_settings, get_log, get_startup, toggle_startup, close_procs, trim, quick_clean])
     .build(tauri::generate_context!())
     .expect("error while running Shimmy Optimizer")
     .run(|_app, e| {

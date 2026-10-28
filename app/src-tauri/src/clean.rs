@@ -10,6 +10,12 @@ use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime};
+use windows::core::{w, PCWSTR};
+use windows::Win32::System::Services::{
+  CloseServiceHandle, ControlService, OpenSCManagerW, OpenServiceW, QueryServiceStatus, StartServiceW, SC_HANDLE, SC_MANAGER_CONNECT,
+  SERVICE_CONTROL_STOP, SERVICE_QUERY_STATUS, SERVICE_START, SERVICE_STATUS, SERVICE_STATUS_CURRENT_STATE, SERVICE_STOP, SERVICE_STOPPED,
+  SERVICE_RUNNING,
+};
 use windows::Win32::UI::Shell::{SHEmptyRecycleBinW, SHQueryRecycleBinW, SHERB_NOCONFIRMATION, SHERB_NOPROGRESSUI, SHERB_NOSOUND, SHQUERYRBINFO};
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -248,6 +254,53 @@ pub fn hidden(cmd: &str, args: &[&str]) -> std::io::Result<std::process::Output>
   Command::new(cmd).args(args).stdin(Stdio::null()).creation_flags(CREATE_NO_WINDOW).output()
 }
 
+/// Closes a service or Service Control Manager handle when it goes out of scope.
+struct ScHandle(SC_HANDLE);
+
+impl Drop for ScHandle {
+  fn drop(&mut self) {
+    unsafe {
+      let _ = CloseServiceHandle(self.0);
+    }
+  }
+}
+
+/// Opens a service through the Service Control Manager with the given access.
+fn open_service(name: PCWSTR, access: u32) -> Option<ScHandle> {
+  unsafe {
+    let scm = ScHandle(OpenSCManagerW(None, None, SC_MANAGER_CONNECT).ok()?);
+    Some(ScHandle(OpenServiceW(scm.0, name, access).ok()?))
+  }
+}
+
+/// Polls until the service reaches the state, for at most ten seconds.
+fn wait_for_state(svc: &ScHandle, state: SERVICE_STATUS_CURRENT_STATE) {
+  for _ in 0..50 {
+    let mut st = SERVICE_STATUS::default();
+    if unsafe { QueryServiceStatus(svc.0, &mut st) }.is_ok_and(|_| st.dwCurrentState == state) {
+      return;
+    }
+    std::thread::sleep(Duration::from_millis(200));
+  }
+}
+
+/// Stops a service and waits until it has stopped. Errors are ignored: a service that is already stopped is fine.
+fn stop_service(name: PCWSTR) {
+  let Some(svc) = open_service(name, SERVICE_STOP | SERVICE_QUERY_STATUS) else { return };
+  let mut st = SERVICE_STATUS::default();
+  if unsafe { ControlService(svc.0, SERVICE_CONTROL_STOP, &mut st) }.is_ok() {
+    wait_for_state(&svc, SERVICE_STOPPED);
+  }
+}
+
+/// Starts a service and waits until it is running. Errors are ignored: a service that is already running is fine.
+fn start_service(name: PCWSTR) {
+  let Some(svc) = open_service(name, SERVICE_START | SERVICE_QUERY_STATUS) else { return };
+  if unsafe { StartServiceW(svc.0, None) }.is_ok() {
+    wait_for_state(&svc, SERVICE_RUNNING);
+  }
+}
+
 pub fn run(ids: &[String], running: &HashSet<String>, progress: &Progress) -> Vec<CatResult> {
   let mut results = Vec::new();
   for d in DEFS.iter().filter(|d| ids.iter().any(|i| i == d.id)) {
@@ -263,17 +316,10 @@ pub fn run(ids: &[String], running: &HashSet<String>, progress: &Progress) -> Ve
         let ok = unsafe { SHEmptyRecycleBinW(None, None, SHERB_NOCONFIRMATION | SHERB_NOPROGRESSUI | SHERB_NOSOUND).is_ok() };
         results.push(if ok || n == 0 { r(bytes, n, 0, None) } else { r(0, 0, n, Some("Windows did not empty the Recycle Bin.".into())) });
       }
-      "delivery" => {
-        let before: u64 = { let mut l = Vec::new(); targets(d.id).iter().for_each(|t| files(t, &mut l)); l.iter().map(|f| f.1).sum() };
-        let out = hidden("powershell.exe", &["-NoProfile", "-NonInteractive", "-Command", "Delete-DeliveryOptimizationCache -Force"]);
-        let after: u64 = { let mut l = Vec::new(); targets(d.id).iter().for_each(|t| files(t, &mut l)); l.iter().map(|f| f.1).sum() };
-        let note = out.ok().filter(|o| !o.status.success()).map(|o| String::from_utf8_lossy(&o.stderr).lines().next().unwrap_or("").to_string());
-        results.push(r(before.saturating_sub(after), 0, 0, note));
-      }
       _ => {
         let wu = d.id == "wu";
         if wu {
-          let _ = hidden("net.exe", &["stop", "wuauserv", "/y"]);
+          stop_service(w!("wuauserv"));
         }
         let ts = targets(d.id);
         let mut list = Vec::new();
@@ -283,7 +329,7 @@ pub fn run(ids: &[String], running: &HashSet<String>, progress: &Progress) -> Ve
           prune_empty(&t.dir);
         }
         if wu {
-          let _ = hidden("net.exe", &["start", "wuauserv"]);
+          start_service(w!("wuauserv"));
         }
         results.push(r(freed, done, skipped, (skipped > 0).then(|| format!("{skipped} files were in use and left in place."))));
       }
