@@ -1222,7 +1222,7 @@ function renderSettings() {
       `<div class="rows">${marked.map(([exe, m]) => `<div class="row"><span>${esc(exe)} <span class="muted">${esc(MARK_WORDS[m] || m)}</span></span><button class="btn small ghost" data-rm-mark="${esc(exe)}">Remove</button></div>`).join('') || '<div class="row"><span class="muted">No apps marked yet.</span></div>'}</div>`),
     block('Heat protection', `When the processor stays at 90 °C or more for 30 seconds, Shimmy turns CPU boost off until it cools to 75 °C for 2 minutes. Quiet: it shows on the Processor page and in the Log.`, sw('data-set="heat.enabled"', st.heat.enabled, 'Heat protection')),
     block('Start with Windows', 'Starts Shimmy in the tray when you sign in, with administrator rights and no prompt, through a Task Scheduler task. Works on battery too.', sw('data-autostart', startWithWindows, 'Start with Windows')),
-    block('Check for updates daily', "Once a day Shimmy reads GitHub's public release info to see whether a newer version is out, and tells you once per new version. It only reads; nothing is uploaded. You can still check from the Updates page.", sw('data-set="updates.autoCheck"', st.updates.autoCheck, 'Check for updates daily')),
+    block('Check for updates daily', "Once a day Shimmy contacts GitHub to see whether a newer version is out, and tells you once per new version. GitHub sees your IP address and Shimmy's version; nothing else about your PC is sent. You can also turn this off on the Updates page, and still check by hand there.", sw('data-set="updates.autoCheck"', st.updates.autoCheck, 'Check for updates daily')),
     block('About', 'Shimmy Optimizer, founded and built by Shimrith Raj. Open source under the MIT licence. The terms of use and the licences of the parts it includes are in the legal folder where Shimmy is installed.'),
     block('Big and duplicate files', 'Where the finder on the Clean page looks, and what it never offers. Code projects, protected work folders, hidden files and your Keep list are always left out.', '',
       `<div class="set-grid">${field('Count a file as large from', num('finder.largeMb', f.largeMb, 'MB', 50, 100000))}${field('Old caches: files untouched for', num('caches.ageDays', st.caches.ageDays, 'days', 1, 365))}</div>
@@ -1353,6 +1353,11 @@ function renderUpdates() {
     [u.lastCheck ? ago(u.lastCheck) : 'Never', u.autoCheck ? 'Last checked, and once a day' : 'Last checked. The daily check is off'],
   ];
   $('#updFacts').innerHTML = facts.map(([v, l]) => `<div><b>${esc(v)}</b><span>${esc(l)}</span></div>`).join('');
+  const auto = $('#updAuto');
+  if (auto.dataset.on !== String(u.autoCheck)) {
+    auto.dataset.on = String(u.autoCheck);
+    auto.innerHTML = `<div class="set-head"><div><h3>Check every day</h3><p>Once a day Shimmy contacts GitHub in the background and tells you once per new version. Turned off, it only contacts GitHub when you press Check now or Download.</p></div>${sw('data-upd-auto', u.autoCheck, 'Check for updates daily')}</div>`;
+  }
   $('#updCheck').disabled = S.updChecking || dl.running;
   $('#updCheck').textContent = S.updChecking ? 'Checking' : 'Check now';
   const body = $('#updBody');
@@ -1420,6 +1425,20 @@ function confirmInstall(version) {
 }
 
 $('#updCheck').addEventListener('click', checkUpdates);
+$('#updAuto').addEventListener('change', async (e) => {
+  const t = e.target;
+  if (!('updAuto' in t.dataset)) return;
+  t.disabled = true;
+  try {
+    const cfg = await api('/api/settings');
+    cfg.settings.updates.autoCheck = t.checked;
+    S.cfg = await api('/api/settings/save', { settings: cfg.settings });
+    S.upd.autoCheck = S.cfg.settings.updates.autoCheck;
+    toast(S.upd.autoCheck ? 'Shimmy will check for updates once a day.' : 'Shimmy will only check when you press Check now.');
+  } catch (err) { toast(err.message, true); t.checked = !t.checked; }
+  t.disabled = false;
+  renderUpdates();
+});
 $('#updBody').addEventListener('click', async (e) => {
   const b = e.target.closest('button');
   if (!b) return;

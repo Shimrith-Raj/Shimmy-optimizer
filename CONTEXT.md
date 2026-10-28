@@ -21,7 +21,7 @@ Home (four readouts and Clean now) · Memory · Processor · Graphics · Storage
 | `caches.rs` | Old caches on the Storage page (age filter, Recycle Bin, skipped while the app runs) |
 | `gpu.rs` | Graphics page: NVML (RTX, only while a page asks) and Windows' GPU Engine counters (every adapter, per app) |
 | `storage.rs`, `clean.rs`, `finder.rs`, `jobs.rs` | Storage page, safe clean and DISM, big and duplicate finder with its deletion gate, background jobs |
-| `update.rs` | Updates page: reads GitHub's latest release, downloads `Shimmy-Optimizer-Setup.exe` to `%TEMP%`, checks its SHA-256, starts it. The only network use in Shimmy, all in Rust |
+| `update.rs` | Updates page: reads GitHub's latest release, downloads `Shimmy-Optimizer-Setup.exe` to `%ProgramData%\Shimmy Optimizer\updates` (administrators-only), checks its SHA-256, starts it. The only network use in Shimmy, all in Rust |
 | `hold.rs` | Run from the charger: hold level, plug-in re-hold, override and drain warnings |
 | `battery.rs`, `asus.rs` | Battery page; ASUS ATK (`\\.\ATKACPI`) for fans and the charge limit |
 | `auto.rs` | Alerts, automatic memory clean, weekly clean: pure decision functions, unit-tested |

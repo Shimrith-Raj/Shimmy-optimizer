@@ -107,8 +107,9 @@ models, Shimmy warns you once before its first firmware change and changes nothi
 - **Everything is logged.** Every close, clean, delete, fan change and charge-limit write is written to a CSV log.
 - **No server, and almost no network.** The UI talks to the Rust core over Tauri IPC with a capability allow-list, and
   the window itself cannot reach the network. The only network use is Shimmy reading GitHub's public release info and
-  downloading the installer when you update; the daily check can be turned off in Settings. The installer's SHA-256 is
-  checked before it runs, and nothing is ever uploaded.
+  downloading the installer when you update. GitHub sees your IP address and Shimmy's version; nothing else about your PC
+  is sent. The daily check can be turned off on the Updates page. The installer is saved in an administrators-only folder
+  and its SHA-256 is checked before it runs.
 - **Light when idle.** The window and its WebView are destroyed when you close it, so Shimmy uses about 30 MB in the tray.
 - **Tested against reality.** Rust unit tests, a parity test against the app's previous version on a real 293-process
   snapshot, and read-only checks that run on the actual laptop.

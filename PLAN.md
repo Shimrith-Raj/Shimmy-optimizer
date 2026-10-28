@@ -440,9 +440,9 @@ a release, so each session stays small.
 
 | Sub-phase | What | Release |
 |---|---|---|
-| 10b | Updates page: check GitHub, what's new, download and install (SHA-256 checked) | **v0.5.0** (built with 10c) |
-| 10c | Accurate per-core processor values | **v0.5.0** (built with 10b) |
-| **10a** | Build fixes against antivirus flags + the safe-marking system for apps | v0.5.1 (moved later: not started) |
+| 10b | Updates page: check GitHub, what's new, download and install (SHA-256 checked) | **v0.5.1** (built with 10c; not yet released) |
+| 10c | Accurate per-core processor values | **v0.5.1** (built with 10b; not yet released) |
+| **10a** | Build fixes against antivirus flags + the safe-marking system for apps | **v0.5.0** (released) |
 | 10d | Graphics for every vendor (AMD, Intel, NVIDIA) | v0.6.0 |
 
 ### Research already done (do not redo)
@@ -501,8 +501,8 @@ asserts 1373 MHz.
   "Error launching installer". Uninstall the old version first. Public releases started at 0.4.1, so users are not affected.
   Never change `bundle.publisher` again.
 - 48 tests pass (46 lib, 2 parity). Still unsigned: signing and the Microsoft false-positive report need the owner.
-### Built (2026-10-28, v0.5.0)
-10b and 10c shipped together as v0.5.0; 10a moves to v0.5.1.
+### Built (2026-10-28, v0.5.1, not yet released)
+10b and 10c are built together as v0.5.1 (this merge, not yet released); 10a was released as v0.5.0.
 
 **10c: per-core values** (`cpu.rs`, `lib.rs`, `system.rs`)
 - **Clock:** a logical processor's effective clock is `% Processor Performance` x `Processor Frequency` / 100 from the PDH
@@ -530,10 +530,10 @@ asserts 1373 MHz.
   compared). The installer asset must be named `Shimmy-Optimizer-Setup.exe` and its URL must start with this repository's
   release-download path. Its SHA-256 is the API's `digest`, else the first hex token of `Shimmy-Optimizer-Setup.exe.sha256`;
   with neither, the page says why and Download is not offered.
-- Download: a background job (`jobs.rs`) to `%TEMP%\Shimmy-Optimizer-Setup-<version>.exe.part`, with byte progress from two
+- Download: a background job (`jobs.rs`) to `%ProgramData%\Shimmy Optimizer\updates\Shimmy-Optimizer-Setup-<version>.exe.part` (a folder only SYSTEM and Administrators can write to), with byte progress from two
   counters in the shared state. The file is hashed from disk; a match renames it to the real name, a mismatch, a short or
   oversized download deletes it. The URL and hash come from the last check kept in Rust, never from the page.
-- Install: confirms, hashes the file again, then starts it (normal window, not silent; first with
+- Install: confirms, checks it is the version the last check found, opens the file read-only with no write or delete sharing, hashes it through that handle, then starts it (normal window, not silent; first with
   `CREATE_BREAKAWAY_FROM_JOB`, then without if Windows refuses) and exits through the tray's Exit path (`exit_app`: boost
   restored, history saved). Refused in a development build. Logged as `update-download` (also on failure) and `update-install`.
 - Daily check: `updates.autoCheck` (default on) in settings; `lastCheck`, `latestSeen` and `lastNotified` are kept by Shimmy.
@@ -544,8 +544,8 @@ asserts 1373 MHz.
   notes), Download with progress, Install. Release notes are turned into paragraphs and bullets with `textContent` only.
   Errors in plain words: offline, timeout, GitHub rate limit, no release, no installer, no checksum, checksum mismatch.
 - README's "Built to be trusted" no longer says "No network": it says the only network use is reading GitHub's public release
-  info and downloading the installer, the daily check can be turned off, and nothing is uploaded.
-- Version 0.5.0 in `Cargo.toml`, `Cargo.lock` and `tauri.conf.json`. `build.rs` skips the sensor sidecar when the build host
+  info and downloading the installer, GitHub sees the IP address and version, and the daily check can be turned off.
+- Version 0.5.1 in `Cargo.toml`, `Cargo.lock` and `tauri.conf.json`. `build.rs` skips the sensor sidecar when the build host
   is not Windows, so the code can be compile-checked elsewhere.
 - Rust tests: 48 (CONTEXT.md said 33, which was one short of the real 34 before this). New: version compare, checksum parsing,
   release parsing (digest, `.sha256` asset, refusals), SHA-256 of known bytes, error wording, the daily-check rules and the

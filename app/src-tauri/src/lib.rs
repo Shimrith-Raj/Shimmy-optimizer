@@ -271,7 +271,8 @@ impl Shared {
     *self.nvml.lock().unwrap() = None;
     *self.gpu_counters.lock().unwrap() = None;
     {
-      // Only the processor list is wanted back (list_procs divides by it); nothing reads this System's usage.
+      // Only the processor list is wanted back (list_procs divides by it); nothing reads this System's usage. On Windows
+      // there is no list-only refresh: the list is built by the first refresh, and one call is cheap.
       let mut sys = self.sys.lock().unwrap();
       *sys = System::new();
       sys.refresh_cpu_all();
@@ -1191,6 +1192,15 @@ fn check_update_impl(s: &Shared) -> Result<update::Release, String> {
   let rel = update::check()?;
   *s.update_info.lock().unwrap() = Some(rel.clone());
   {
+    // A download of an older version than the one just found is dropped: it must never be what Install starts.
+    let mut j = s.update_dl.lock().unwrap();
+    if !j.running && update::download_is_stale(j.result.as_ref().map(|d| d.version.as_str()), &rel.latest) {
+      if let Some(d) = j.result.take() {
+        let _ = std::fs::remove_file(&d.path);
+      }
+    }
+  }
+  {
     let mut st = s.settings.lock().unwrap();
     st.updates.last_check = store::now_ms();
     st.updates.latest_seen = rel.latest.clone();
@@ -1250,7 +1260,9 @@ fn start_update_download(s: State<'_, Shr>) -> Result<bool, String> {
   {
     let mut j = s.update_dl.lock().unwrap();
     if !j.running {
-      j.result = None;
+      if let Some(old) = j.result.take() {
+        let _ = std::fs::remove_file(&old.path);
+      }
     }
   }
   let s2 = s.inner().clone();
@@ -1266,8 +1278,8 @@ fn start_update_download(s: State<'_, Shr>) -> Result<bool, String> {
   }))
 }
 
-/// Starts the downloaded installer and quits Shimmy the way the tray's Exit does. The installer is only started if its
-/// hash still matches.
+/// Starts the downloaded installer and quits Shimmy the way the tray's Exit does. The installer is only started if it is
+/// the version the last check found and its hash still matches.
 #[tauri::command]
 async fn install_update(app: AppHandle, s: State<'_, Shr>) -> Result<Value, String> {
   if app.config().identifier.ends_with(".dev") {
@@ -1278,7 +1290,11 @@ async fn install_update(app: AppHandle, s: State<'_, Shr>) -> Result<Value, Stri
     if s.busy.load(Ordering::SeqCst) {
       return Err("A clean-up is still running. Install the update when it has finished.".to_string());
     }
-    let d = s.update_dl.lock().unwrap().result.clone().ok_or("Download the update first.")?;
+    // Only the version the last check found, never whatever an earlier download left behind.
+    let latest = s.update_info.lock().unwrap().as_ref().map(|r| r.latest.clone());
+    let d = s.update_dl.lock().unwrap().result.clone();
+    update::install_check(d.as_ref().map(|d| d.version.as_str()), latest.as_deref())?;
+    let d = d.ok_or("Download the update first.")?;
     update::install(&d)?;
     s.store.log("update-install", &format!("Shimmy {}", d.version), &format!("started {}; Shimmy exits so the installer can replace it", d.path.display()));
     // Let the page get the answer before the window goes.

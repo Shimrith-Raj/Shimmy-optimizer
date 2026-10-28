@@ -56,8 +56,10 @@ Nothing in these terms limits liability that cannot be limited by law.
 
 6. PRIVACY
 
-Shimmy has no accounts, no telemetry, no ads and no network server. It does not send your data anywhere. Its settings,
-history and action log are stored only on your PC, in Shimmy's app-data folder, and you can delete them at any time.
+Shimmy has no accounts, no telemetry and no ads. The only network use is the update check and the update download from
+GitHub, which sees your IP address and the version of Shimmy you run, under GitHub's own privacy policy. Nothing else about
+your PC is sent. The automatic daily check can be turned off on the Updates page. Shimmy's settings, history and action log
+are stored only on your PC, in Shimmy's app-data folder, and you can delete them at any time.
 
 
 7. TRADEMARKS

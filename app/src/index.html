@@ -301,8 +301,9 @@
 
   <section id="tab-updates" hidden>
     <div class="page-head reveal"><h2>Updates</h2><button class="btn ghost" id="updCheck">Check now</button></div>
-    <p class="muted lead">Shimmy reads GitHub's public release info to see whether a newer version is out, and downloads the installer from there. Nothing about your PC is uploaded. The daily check can be turned off in Settings.</p>
+    <p class="muted lead">Checking for updates contacts GitHub (github.com and its download servers). GitHub sees your IP address and which version of Shimmy you have. Nothing else about your PC is sent. The installer is checked against its published SHA-256 before it runs.</p>
     <div class="facts reveal" id="updFacts"></div>
+    <div class="set-block reveal" id="updAuto"></div>
     <div class="recs-block reveal">
       <div class="block-head"><h2 id="updHead">Not checked yet</h2></div>
       <div id="updBody"></div>

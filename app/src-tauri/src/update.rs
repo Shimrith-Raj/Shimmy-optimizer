@@ -1,14 +1,25 @@
 //! Updates: reads GitHub's public release info for the latest stable release, downloads its installer and checks the
 //! SHA-256 before anything runs. This is the only network use in Shimmy. It all happens here in Rust (the window's CSP
-//! allows no network), every request has a timeout, and nothing is uploaded.
+//! allows no network), every request has a timeout, and nothing about the PC is sent (GitHub sees the IP address and the
+//! Shimmy version in the user agent). Shimmy runs as administrator, so the installer is saved in a folder only
+//! administrators can write to, and it is held open read-only while it is hashed and started.
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
+use std::os::windows::ffi::OsStrExt;
+use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
+use windows::Win32::Foundation::{HLOCAL, LocalFree};
+use windows::Win32::Security::Authorization::{ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, GetNamedSecurityInfoW, SDDL_REVISION_1, SE_FILE_OBJECT, SetNamedSecurityInfoW};
+use windows::Win32::Security::{ACL, DACL_SECURITY_INFORMATION, GetSecurityDescriptorDacl, OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID};
+use windows::Win32::Storage::FileSystem::FILE_SHARE_READ;
+use windows::Win32::System::Com::CoTaskMemFree;
+use windows::Win32::UI::Shell::{FOLDERID_ProgramData, KF_FLAG_DEFAULT, SHGetKnownFolderPath};
+use windows::core::{BOOL, PCWSTR, PWSTR};
 
 const LATEST: &str = "https://api.github.com/repos/Shimrith-Raj/Shimmy-optimizer/releases/latest";
 /// Every release asset must come from here; anything else in the API's answer is ignored.
@@ -23,6 +34,11 @@ const NOTES_MAX: usize = 20_000;
 /// A download larger than this is refused when the release did not say how big it is.
 const SIZE_CAP: u64 = 1 << 30;
 const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+const REPARSE_POINT: u32 = 0x400;
+/// Under ProgramData, where a standard user cannot change a folder an administrator made.
+const UPDATES_DIR: &str = "Shimmy Optimizer\\updates";
+/// Protected (no inheritance): SYSTEM and Administrators full control, everyone else read and run only.
+const DIR_SDDL: &str = "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)";
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -120,9 +136,120 @@ fn sha256_file(p: &Path) -> std::io::Result<String> {
   sha256_reader(&mut std::fs::File::open(p)?)
 }
 
+/// Opens a file for reading only, letting nobody else write to it, delete it or rename it while the handle is open.
+fn open_locked(p: &Path) -> std::io::Result<std::fs::File> {
+  std::fs::OpenOptions::new().read(true).share_mode(FILE_SHARE_READ.0).open(p)
+}
+
+/// After a check found `latest`: a download of any other version is stale and must be dropped.
+pub fn download_is_stale(downloaded: Option<&str>, latest: &str) -> bool {
+  downloaded.is_some_and(|v| v != latest)
+}
+
+/// Whether the installer on disk may be started: it must be the version the last check found, and newer than this one.
+pub fn install_check(downloaded: Option<&str>, latest: Option<&str>) -> Result<(), String> {
+  let latest = latest.ok_or("Check for updates first.")?;
+  if !is_newer(CURRENT, latest) {
+    return Err("You already have the newest version.".into());
+  }
+  match downloaded {
+    None => Err("Download the update first.".into()),
+    Some(v) if v != latest => Err(format!("The downloaded installer is for Shimmy {v}, but the newest version is {latest}. Download the update again.")),
+    Some(_) => Ok(()),
+  }
+}
+
+fn wide(p: &Path) -> Vec<u16> {
+  p.as_os_str().encode_wide().chain(Some(0)).collect()
+}
+
+/// ProgramData, from Windows and not from the environment (a user's own variable could point it anywhere).
+fn program_data() -> PathBuf {
+  let fallback = || PathBuf::from(r"C:\ProgramData");
+  match unsafe { SHGetKnownFolderPath(&FOLDERID_ProgramData, KF_FLAG_DEFAULT, None) } {
+    Ok(p) => {
+      let s = unsafe { p.to_string() };
+      unsafe { CoTaskMemFree(Some(p.0 as _)) };
+      s.map(PathBuf::from).unwrap_or_else(|_| fallback())
+    }
+    Err(_) => fallback(),
+  }
+}
+
+/// Where installers are saved: a folder only administrators can write to.
+fn updates_dir() -> PathBuf {
+  program_data().join(UPDATES_DIR)
+}
+
 /// Where a version's installer is saved.
 pub fn installer_path(version: &str) -> PathBuf {
-  std::env::temp_dir().join(format!("Shimmy-Optimizer-Setup-{version}.exe"))
+  updates_dir().join(format!("Shimmy-Optimizer-Setup-{version}.exe"))
+}
+
+/// Only SYSTEM and the Administrators group may own the folders the installer sits in.
+fn trusted_owner(sid: &str) -> bool {
+  matches!(sid, "S-1-5-18" | "S-1-5-32-544")
+}
+
+/// The SID of a file or folder's owner, as text.
+fn owner_sid(p: &Path) -> Result<String, String> {
+  let name = wide(p);
+  unsafe {
+    let (mut owner, mut sd) = (PSID::default(), PSECURITY_DESCRIPTOR::default());
+    GetNamedSecurityInfoW(PCWSTR(name.as_ptr()), SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION, Some(&mut owner), None, None, None, &mut sd).ok().map_err(|e| e.to_string())?;
+    let mut text = PWSTR::null();
+    let out = ConvertSidToStringSidW(owner, &mut text).map_err(|e| e.to_string()).and_then(|_| text.to_string().map_err(|e| e.to_string()));
+    if !text.is_null() {
+      LocalFree(Some(HLOCAL(text.0 as _)));
+    }
+    LocalFree(Some(HLOCAL(sd.0)));
+    out
+  }
+}
+
+/// Replaces the folder's permissions with `DIR_SDDL`, cut off from what it would inherit.
+fn lock_down(dir: &Path) -> Result<(), String> {
+  let name = wide(dir);
+  let sddl: Vec<u16> = DIR_SDDL.encode_utf16().chain(Some(0)).collect();
+  unsafe {
+    let mut sd = PSECURITY_DESCRIPTOR::default();
+    ConvertStringSecurityDescriptorToSecurityDescriptorW(PCWSTR(sddl.as_ptr()), SDDL_REVISION_1, &mut sd, None).map_err(|e| e.to_string())?;
+    let (mut present, mut defaulted, mut acl) = (BOOL(0), BOOL(0), std::ptr::null_mut::<ACL>());
+    let out = match GetSecurityDescriptorDacl(sd, &mut present, &mut acl, &mut defaulted) {
+      Ok(()) if present.as_bool() && !acl.is_null() => {
+        SetNamedSecurityInfoW(PCWSTR(name.as_ptr()), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, None, None, Some(acl), None).ok().map_err(|e| e.to_string())
+      }
+      Ok(()) => Err("the permissions list was empty".to_string()),
+      Err(e) => Err(e.to_string()),
+    };
+    LocalFree(Some(HLOCAL(sd.0)));
+    out
+  }
+}
+
+/// A real folder (not a link somewhere else) owned by SYSTEM or Administrators.
+fn check_folder(dir: &Path) -> Result<(), String> {
+  let meta = std::fs::symlink_metadata(dir).map_err(|e| e.to_string())?;
+  if !meta.is_dir() || meta.file_attributes() & REPARSE_POINT != 0 {
+    return Err(format!("{} is a link, not a folder", dir.display()));
+  }
+  if !trusted_owner(&owner_sid(dir)?) {
+    return Err(format!("{} belongs to another account", dir.display()));
+  }
+  Ok(())
+}
+
+/// Creates the updates folder if needed and makes sure only administrators can write to it. If that cannot be done,
+/// nothing is downloaded or run.
+fn prepare_dir() -> Result<(), String> {
+  let dir = updates_dir();
+  let why = |e: String| format!("Shimmy could not set up a protected folder for the installer ({e}), so it will not download or run one.");
+  std::fs::create_dir_all(&dir).map_err(|e| why(e.to_string()))?;
+  if let Some(parent) = dir.parent() {
+    check_folder(parent).map_err(why)?;
+  }
+  check_folder(&dir).map_err(why)?;
+  lock_down(&dir).map_err(why)
 }
 
 fn parse_release(v: &Value, current: &str) -> Result<Parsed, String> {
@@ -228,14 +355,39 @@ pub fn check() -> Result<Release, String> {
   Ok(p.release)
 }
 
-/// Downloads the installer to the temp folder, checks its SHA-256 against the release's, and only then gives it its
-/// real name. A mismatch deletes the file. `done` and `total` are bytes, for the page's progress bar.
+/// Streams the body into `part`. The file is closed when this returns, whichever way it returns, so the caller can
+/// delete it.
+fn save(body: &mut ureq::Body, part: &Path, limit: u64, done: &AtomicU64) -> Result<u64, String> {
+  let mut file = std::fs::File::create(part).map_err(|e| format!("Shimmy could not save the installer to its updates folder: {e}"))?;
+  let mut reader = body.as_reader();
+  let mut buf = vec![0u8; 64 * 1024];
+  let mut got = 0u64;
+  loop {
+    let n = reader.read(&mut buf).map_err(|_| "The download was interrupted. Check the connection and try again.".to_string())?;
+    if n == 0 {
+      break;
+    }
+    got += n as u64;
+    if got > limit {
+      return Err("The download is larger than the release says, so it was stopped and deleted.".into());
+    }
+    file.write_all(&buf[..n]).map_err(|e| format!("Shimmy could not write the installer to its updates folder: {e}"))?;
+    done.store(got, Ordering::Relaxed);
+  }
+  file.flush().map_err(|e| format!("Shimmy could not write the installer to its updates folder: {e}"))?;
+  Ok(got)
+}
+
+/// Downloads the installer into the administrators-only updates folder as a `.part` file, checks its SHA-256 against
+/// the release's, and only then gives it its real name. Any failure deletes the `.part` file. `done` and `total` are
+/// bytes, for the page's progress bar.
 pub fn download(rel: &Release, done: &AtomicU64, total: &AtomicU64) -> Result<Downloaded, String> {
   if let Some(p) = &rel.problem {
     return Err(p.clone());
   }
   let url = rel.asset_url.as_deref().ok_or("This release has no installer to download.")?;
   let want = rel.sha256.as_deref().ok_or("This release has no checksum, so Shimmy will not download it.")?;
+  prepare_dir()?;
   let path = installer_path(&rel.latest);
   let part = PathBuf::from(format!("{}.part", path.display()));
   done.store(0, Ordering::Relaxed);
@@ -252,24 +404,7 @@ pub fn download(rel: &Release, done: &AtomicU64, total: &AtomicU64) -> Result<Do
     total.store(len, Ordering::Relaxed);
   }
   let limit = if rel.asset_size > 0 { rel.asset_size } else { SIZE_CAP };
-  let mut file = std::fs::File::create(&part).map_err(|e| format!("Shimmy could not save the installer to the temp folder: {e}"))?;
-  let mut reader = resp.body_mut().as_reader();
-  let mut buf = vec![0u8; 64 * 1024];
-  let mut got = 0u64;
-  loop {
-    let n = reader.read(&mut buf).map_err(|_| fail("The download was interrupted. Check the connection and try again."))?;
-    if n == 0 {
-      break;
-    }
-    got += n as u64;
-    if got > limit {
-      return Err(fail("The download is larger than the release says, so it was stopped and deleted."));
-    }
-    file.write_all(&buf[..n]).map_err(|e| fail(&format!("Shimmy could not write the installer to the temp folder: {e}")))?;
-    done.store(got, Ordering::Relaxed);
-  }
-  file.flush().map_err(|e| fail(&format!("Shimmy could not write the installer to the temp folder: {e}")))?;
-  drop(file);
+  let got = save(resp.body_mut(), &part, limit, done).map_err(|e| fail(&e))?;
   if rel.asset_size > 0 && got != rel.asset_size {
     return Err(fail("The download ended early, so it was deleted. Try again."));
   }
@@ -282,17 +417,26 @@ pub fn download(rel: &Release, done: &AtomicU64, total: &AtomicU64) -> Result<Do
   Ok(Downloaded { version: rel.latest.clone(), path, sha256: have, bytes: got })
 }
 
-/// Starts the installer (its normal window, not silent), after hashing the file again: it has sat in the temp folder
-/// since the download. The caller exits Shimmy right after.
+/// Starts the installer (its normal window, not silent). The file is opened so nobody else can write to, delete or
+/// replace it, hashed through that same handle, and the handle stays open until the installer has started. The caller
+/// exits Shimmy right after.
 pub fn install(d: &Downloaded) -> Result<(), String> {
-  let have = sha256_file(&d.path).map_err(|_| "The downloaded installer is gone. Download it again.".to_string())?;
+  let mut file = open_locked(&d.path).map_err(|e| match e.kind() {
+    std::io::ErrorKind::NotFound => "The downloaded installer is gone. Download it again.".to_string(),
+    _ => format!("The downloaded installer is open in another program, so Shimmy will not start it ({e})."),
+  })?;
+  let have = sha256_reader(&mut file).map_err(|e| format!("Shimmy could not read the downloaded installer to check it: {e}"))?;
   if have != d.sha256 {
+    drop(file);
     let _ = std::fs::remove_file(&d.path);
     return Err("The downloaded installer changed after it was checked, so it was deleted. Download it again.".into());
   }
+  // The Authenticode signature check goes here once releases are signed.
   // A job object from the Task Scheduler start could end the installer with Shimmy; leave it if the job allows.
   let run = |flags: u32| std::process::Command::new(&d.path).creation_flags(flags).spawn();
-  run(CREATE_BREAKAWAY_FROM_JOB).or_else(|_| run(0)).map(|_| ()).map_err(|e| format!("Windows would not start the installer: {e}"))
+  let started = run(CREATE_BREAKAWAY_FROM_JOB).or_else(|_| run(0));
+  drop(file);
+  started.map(|_| ()).map_err(|e| format!("Windows would not start the installer: {e}"))
 }
 
 #[cfg(test)]
@@ -411,6 +555,95 @@ mod tests {
 
   #[test]
   fn installer_name_carries_the_version() {
-    assert!(installer_path("0.5.1").ends_with("Shimmy-Optimizer-Setup-0.5.1.exe"));
+    let p = installer_path("0.5.1");
+    assert!(p.ends_with("Shimmy-Optimizer-Setup-0.5.1.exe"));
+    assert!(p.parent().unwrap().ends_with("Shimmy Optimizer\\updates"));
+    assert!(!p.starts_with(std::env::temp_dir()), "not a folder a standard user can write to");
+  }
+
+  #[test]
+  fn a_stale_download_is_dropped_and_never_installed() {
+    // After a check: keep a download only if it is the version just found.
+    assert!(!download_is_stale(None, "9.0.0"), "nothing downloaded, nothing to drop");
+    assert!(!download_is_stale(Some("9.0.0"), "9.0.0"));
+    assert!(download_is_stale(Some("8.0.0"), "9.0.0"), "a newer release came out after the download");
+    // Before an install: it must be the version the last check found.
+    assert_eq!(install_check(Some("9.0.0"), Some("9.0.0")), Ok(()));
+    assert!(install_check(Some("8.0.0"), Some("9.0.0")).unwrap_err().contains("8.0.0"));
+    assert_eq!(install_check(None, Some("9.0.0")), Err("Download the update first.".into()));
+    assert_eq!(install_check(Some("9.0.0"), None), Err("Check for updates first.".into()));
+    assert!(install_check(Some(CURRENT), Some(CURRENT)).unwrap_err().contains("newest"), "never a same-version installer");
+    assert!(install_check(Some("0.0.1"), Some("0.0.1")).is_err(), "never an older one");
+  }
+
+  #[test]
+  fn only_system_and_administrators_may_own_the_folder() {
+    assert!(trusted_owner("S-1-5-18"));
+    assert!(trusted_owner("S-1-5-32-544"));
+    assert!(!trusted_owner("S-1-5-32-545"), "Users");
+    assert!(!trusted_owner("S-1-5-21-1-2-3-1001"));
+    assert!(!trusted_owner(""));
+  }
+
+  fn scratch(name: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!("shimmy-update-test-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    d
+  }
+
+  #[test]
+  fn the_updates_folder_gets_a_protected_admin_only_list() {
+    let d = scratch("acl");
+    lock_down(&d).unwrap();
+    let name = wide(&d);
+    let got = unsafe {
+      use windows::Win32::Security::Authorization::ConvertSecurityDescriptorToStringSecurityDescriptorW;
+      let mut sd = PSECURITY_DESCRIPTOR::default();
+      GetNamedSecurityInfoW(PCWSTR(name.as_ptr()), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, None, None, None, None, &mut sd).ok().unwrap();
+      let mut text = PWSTR::null();
+      ConvertSecurityDescriptorToStringSecurityDescriptorW(sd, SDDL_REVISION_1, DACL_SECURITY_INFORMATION, &mut text, None).unwrap();
+      let out = text.to_string().unwrap();
+      LocalFree(Some(HLOCAL(text.0 as _)));
+      LocalFree(Some(HLOCAL(sd.0)));
+      out
+    };
+    let _ = std::fs::remove_dir(&d);
+    assert!(got.starts_with("D:P"), "protected, so nothing is inherited: {got}");
+    assert!(got.contains("(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)"), "{got}");
+  }
+
+  #[test]
+  fn a_locked_installer_cannot_be_changed_or_swapped() {
+    let d = scratch("lock");
+    let f = d.join("Setup.exe");
+    std::fs::write(&f, b"original").unwrap();
+    let held = open_locked(&f).unwrap();
+    assert!(std::fs::OpenOptions::new().write(true).open(&f).is_err(), "no writing");
+    assert!(std::fs::write(&f, b"evil").is_err(), "no overwriting");
+    assert!(std::fs::remove_file(&f).is_err(), "no deleting");
+    assert!(std::fs::rename(&f, d.join("Other.exe")).is_err(), "no renaming away");
+    std::fs::write(d.join("New.exe"), b"evil").unwrap();
+    assert!(std::fs::rename(d.join("New.exe"), &f).is_err(), "no swapping a different file in");
+    assert!(std::fs::File::open(&f).is_ok(), "reading is still allowed");
+    drop(held);
+    std::fs::write(&f, b"changed").unwrap();
+    let _ = std::fs::remove_dir_all(&d);
+  }
+
+  #[test]
+  fn install_starts_a_file_it_holds_open_and_refuses_a_changed_one() {
+    let d = scratch("run");
+    let whoami = Path::new(&std::env::var("SystemRoot").unwrap()).join("System32").join("whoami.exe");
+    let (ok, changed) = (d.join("Setup.exe"), d.join("Changed.exe"));
+    std::fs::copy(&whoami, &ok).unwrap();
+    std::fs::copy(&whoami, &changed).unwrap();
+    let good = Downloaded { version: "9.0.0".into(), sha256: sha256_file(&ok).unwrap(), path: ok, bytes: 0 };
+    assert_eq!(install(&good), Ok(()), "a stand-in program starts while its file is held open");
+    let bad = Downloaded { version: "9.0.0".into(), sha256: HEX.into(), path: changed.clone(), bytes: 0 };
+    assert!(install(&bad).unwrap_err().contains("changed after it was checked"));
+    assert!(!changed.exists(), "a changed installer is deleted");
+    assert!(install(&bad).unwrap_err().contains("gone"));
+    let _ = std::fs::remove_dir_all(&d);
   }
 }
