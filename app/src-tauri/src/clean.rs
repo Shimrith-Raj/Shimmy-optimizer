@@ -305,6 +305,37 @@ pub fn hidden(cmd: &str, args: &[&str]) -> std::io::Result<std::process::Output>
   Command::new(cmd).args(args).stdin(Stdio::null()).creation_flags(CREATE_NO_WINDOW).output()
 }
 
+/// Like `hidden`, but the program is killed after `limit`, with a TimedOut error: for tools that can hang on the
+/// network or a prompt (winget), so a job never stays "running" for good.
+pub fn hidden_for(cmd: &str, args: &[&str], limit: Duration) -> std::io::Result<std::process::Output> {
+  let mut child = Command::new(cmd).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).creation_flags(CREATE_NO_WINDOW).spawn()?;
+  // Read both pipes on their own threads, so a chatty program cannot block on a full pipe while we wait.
+  let drain = |p: Option<Box<dyn Read + Send>>| {
+    std::thread::spawn(move || {
+      let mut buf = Vec::new();
+      if let Some(mut p) = p {
+        let _ = p.read_to_end(&mut buf);
+      }
+      buf
+    })
+  };
+  let out = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+  let err = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+  let started = std::time::Instant::now();
+  let status = loop {
+    if let Some(st) = child.try_wait()? {
+      break st;
+    }
+    if started.elapsed() >= limit {
+      let _ = child.kill();
+      let _ = child.wait();
+      return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, format!("{cmd} took longer than {} minutes and was stopped", limit.as_secs() / 60)));
+    }
+    std::thread::sleep(Duration::from_millis(200));
+  };
+  Ok(std::process::Output { status, stdout: out.join().unwrap_or_default(), stderr: err.join().unwrap_or_default() })
+}
+
 /// Closes a service or Service Control Manager handle when it goes out of scope.
 struct ScHandle(SC_HANDLE);
 
@@ -502,6 +533,16 @@ mod tests {
     assert!(super::known("SystemRoot").unwrap().join("explorer.exe").is_file());
     assert!(super::known("TEMP").is_none(), "never read from the environment");
     assert!(super::targets("user-temp")[0].dir.ends_with(r"AppData\Local\Temp"));
+  }
+
+  #[test]
+  fn slow_programs_are_stopped() {
+    let sys = super::known("SystemRoot").unwrap().join("System32");
+    let (ping, cmd) = (sys.join("PING.EXE"), sys.join("cmd.exe"));
+    let slow = super::hidden_for(&ping.to_string_lossy(), &["-n", "6", "127.0.0.1"], std::time::Duration::from_secs(1));
+    assert_eq!(slow.unwrap_err().kind(), std::io::ErrorKind::TimedOut);
+    let quick = super::hidden_for(&cmd.to_string_lossy(), &["/c", "echo", "hi"], std::time::Duration::from_secs(20)).unwrap();
+    assert!(quick.status.success() && String::from_utf8_lossy(&quick.stdout).contains("hi"));
   }
 
   #[test]

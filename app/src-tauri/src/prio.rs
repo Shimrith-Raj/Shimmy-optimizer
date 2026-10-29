@@ -87,7 +87,8 @@ pub fn apply(pid: u32, level: Level) -> Result<u32, String> {
     let ok = SetPriorityClass(h, class).is_ok();
     throttle(h, level == Level::Eco);
     let _ = CloseHandle(h);
-    if ok && old != 0 { Ok(old) } else { Err("Windows refused the change.".into()) }
+    // A process lowered without its old class read is still recorded (as Normal), so it is always put back.
+    if ok { Ok(if old == 0 { NORMAL_PRIORITY_CLASS.0 } else { old }) } else { Err("Windows refused the change.".into()) }
   }
 }
 

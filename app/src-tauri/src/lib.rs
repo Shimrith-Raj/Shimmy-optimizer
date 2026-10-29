@@ -1122,7 +1122,7 @@ fn heat_watch(s: &Shared, now: u64) {
     let st = s.settings.lock().unwrap();
     (st.heat.enabled, st.heat.saved.is_some())
   };
-  let temp = s.readings().0.and_then(|r| sensors::value(&r, "Cpu", "Temperature", "Core (Tctl/Tdie)"));
+  let temp = s.readings().0.and_then(|r| sensors::cpu_temp(&r));
   let action = s.heat_watch.lock().unwrap().step(enabled, boost_off, temp, now);
   match action {
     Some(heat::Action::BoostOff) => match heat::boost_off(now) {
@@ -1187,25 +1187,27 @@ fn power_watch(s: &Shared) {
 
 // ---------- Cooling check ----------
 
-fn cpu_temp(rows: &[sensors::Reading]) -> Option<f64> {
-  sensors::value(rows, "Cpu", "Temperature", "Core (Tctl/Tdie)")
-}
-
 /// Full load on every logical processor for `seconds` (60 to 120), watched every second. Refused without a temperature
 /// reading, since then it could not stop at 95 °C.
 #[tauri::command]
 fn start_cool_check(s: State<'_, Shr>, seconds: u32) -> Result<bool, String> {
-  match s.readings().0.as_deref().and_then(cpu_temp) {
+  match s.readings().0.as_deref().and_then(sensors::cpu_temp) {
     None => return Err("The cooling check needs the processor's temperature, so it can stop at 95 °C, and Shimmy cannot read it right now.".into()),
     Some(t) if t >= cool::STOP_C - 10.0 => return Err(format!("The processor is already at {t:.0} °C. Let it cool down first.")),
     _ => {}
   }
   let limit = cool::clamp_secs(seconds) as u64 * 1000;
+  // A second Start while a check runs (or is still stopping) must not clear its Stop.
+  if s.cool.lock().unwrap().running {
+    return Ok(false);
+  }
   s.cool_stop.store(false, Ordering::SeqCst);
   let s2 = s.inner().clone();
   Ok(jobs::start(&s.cool, move |progress| {
     let started = store::now_ms();
     let load = cool::load(&s2.cool_stop);
+    // The load threads stop when this goes out of scope, even if the loop below panics.
+    let _stop = cool::StopOnDrop(s2.cool_stop.clone());
     let (mut samples, mut no_temp, mut boost_off) = (Vec::new(), 0u64, false);
     let stop = loop {
       std::thread::sleep(Duration::from_secs(1));
@@ -1246,10 +1248,13 @@ fn uninstaller_open(s: &Shared) -> bool {
 }
 
 #[tauri::command]
-async fn get_programs(s: State<'_, Shr>) -> Result<Value, String> {
+async fn get_programs(s: State<'_, Shr>, installed: Option<bool>) -> Result<Value, String> {
   let s = s.inner().clone();
   tauri::async_runtime::spawn_blocking(move || {
-    json!({ "installed": programs::list(), "updates": job_json(&s.app_updates), "updateRun": job_json(&s.app_update_run), "uninstalling": uninstaller_open(&s) })
+    // The page polls every 1.5 s while winget runs; it asks for the installed list (a full registry read) only
+    // when that list can have changed.
+    let list = installed.unwrap_or(true).then(programs::list);
+    json!({ "installed": list, "updates": job_json(&s.app_updates), "updateRun": job_json(&s.app_update_run), "uninstalling": uninstaller_open(&s) })
   })
   .await
   .map_err(|e| e.to_string())
@@ -1948,7 +1953,7 @@ fn automation(app: &AppHandle, s: &Shr, tick: u64) {
     if w.ram.step(m.pct >= a.ram_pct as u64, now, MIN, 30 * MIN) {
       alert(app, s, "Memory is nearly full", &format!("{}% in use for over a minute. Open Shimmy to see what to close.", m.pct));
     }
-    let temp = s.readings().0.and_then(|r| sensors::value(&r, "Cpu", "Temperature", "Core (Tctl/Tdie)"));
+    let temp = s.readings().0.and_then(|r| sensors::cpu_temp(&r));
     if w.cpu.step(temp.is_some_and(|t| t >= a.cpu_temp_c as f64), now, 30_000, 30 * MIN) {
       alert(app, s, "The processor is running hot", &format!("{:.0} °C for half a minute. Check the vents are clear and nothing is stuck at full load.", temp.unwrap_or(0.0)));
     }
@@ -2023,7 +2028,7 @@ fn start_sampler(app: AppHandle) {
       if tick % 3 == 0 {
         s.store.sample(system::mem_now().used_mb);
         let load = s.cpu_live.lock().unwrap().total;
-        let temp = s.readings().0.and_then(|r| sensors::value(&r, "Cpu", "Temperature", "Core (Tctl/Tdie)"));
+        let temp = s.readings().0.and_then(|r| sensors::cpu_temp(&r));
         s.store.sample_cpu(load, temp.map(|t| t as f32));
       }
       if tick % 20 == 19 {

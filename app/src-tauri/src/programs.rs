@@ -201,14 +201,19 @@ fn winget_exe() -> Option<std::path::PathBuf> {
   Some(std::path::Path::new(loc).join("winget.exe")).filter(|p| p.is_file())
 }
 
+/// How long winget may take: listing updates waits on the network; an update also runs the app's own installer.
+const CHECK_LIMIT: std::time::Duration = std::time::Duration::from_secs(3 * 60);
+const UPDATE_LIMIT: std::time::Duration = std::time::Duration::from_secs(20 * 60);
+
 const AGREE: [&str; 3] = ["--accept-source-agreements", "--disable-interactivity", "--nowarn"];
 
 /// Apps with an update, or None when winget is not on this PC.
 pub fn upgrades() -> Result<Option<Vec<Upgrade>>, String> {
   let Some(exe) = winget_exe() else { return Ok(None) };
-  let out = match crate::clean::hidden(&exe.to_string_lossy(), &[&["upgrade"][..], &AGREE[..]].concat()) {
+  let out = match crate::clean::hidden_for(&exe.to_string_lossy(), &[&["upgrade"][..], &AGREE[..]].concat(), CHECK_LIMIT) {
     Ok(o) => o,
     Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+    Err(e) if e.kind() == std::io::ErrorKind::TimedOut => return Err("winget did not answer within 3 minutes. Check your connection and try again.".into()),
     Err(e) => return Err(format!("Could not start winget: {e}")),
   };
   Ok(Some(parse_upgrades(&String::from_utf8_lossy(&out.stdout))))
@@ -221,7 +226,10 @@ pub fn upgrade(id: &str) -> Result<(), String> {
   }
   let args = [&["upgrade", "--id", id, "--exact", "--accept-package-agreements"][..], &AGREE[..]].concat();
   let exe = winget_exe().ok_or("winget, Windows' app installer, is not on this PC.")?;
-  let out = crate::clean::hidden(&exe.to_string_lossy(), &args).map_err(|e| format!("Could not start winget: {e}"))?;
+  let out = crate::clean::hidden_for(&exe.to_string_lossy(), &args, UPDATE_LIMIT).map_err(|e| match e.kind() {
+    std::io::ErrorKind::TimedOut => "The update took longer than 20 minutes, so Shimmy stopped waiting for it.".to_string(),
+    _ => format!("Could not start winget: {e}"),
+  })?;
   if out.status.success() {
     return Ok(());
   }

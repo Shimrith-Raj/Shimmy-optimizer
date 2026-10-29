@@ -298,7 +298,7 @@ pub fn build(name: String, topo: &Topology, live: &Live, base: Option<f64>, rows
   let rated = topo.cores.iter().position(|c| c.class == highest).and_then(|i| cores[i].base_mhz);
   let bases: Vec<f64> = cores.iter().filter_map(|c| c.base_mhz).collect();
   let avg_base = (!bases.is_empty()).then(|| bases.iter().sum::<f64>() / bases.len() as f64);
-  let temp = value(rows, "Cpu", "Temperature", "Core (Tctl/Tdie)").or_else(|| value(rows, "Cpu", "Temperature", "Core (Tctl)"));
+  let temp = crate::sensors::cpu_temp(rows);
   CpuView {
     name,
     threads: topo.threads,

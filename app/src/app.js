@@ -768,10 +768,11 @@ function fileRow(i) {
 function renderFinder(j) {
   $('#finderBtn').disabled = j.running;
   $('#finderBtn').textContent = j.running ? 'Looking' : j.result ? 'Look again' : 'Look for them';
+  // Export is offered only for results the page is showing, never for an older scan behind a new one.
+  $('#finderExport').hidden = j.running || !!j.error || !j.result;
   if (j.running) { $('#finder').innerHTML = `<div class="empty">${esc(j.progress)}…</div>`; return; }
   if (j.error) { $('#finder').innerHTML = `<div class="empty">${esc(j.error)}</div>`; return; }
   const f = j.result;
-  $('#finderExport').hidden = !f;
   if (!f || (j.at === S.finderAt && $('#finder').children.length)) return;
   S.finderAt = j.at;
   const wasted = f.dups.reduce((a, g) => a + g.bytes * (g.files.length - 1), 0);
@@ -1588,16 +1589,22 @@ async function loadStartup() {
 // ---------- Programs ----------
 
 let progTimer = null;
-const progSoon = (ms = 1500) => { clearTimeout(progTimer); progTimer = setTimeout(() => S.tab === 'programs' && loadPrograms(), ms); };
+// Polls for winget and uninstaller progress; `full` also re-reads the installed apps, which is a registry walk, so
+// only when that list can have changed.
+const progSoon = (ms = 1500, full = false) => { clearTimeout(progTimer); progTimer = setTimeout(() => S.tab === 'programs' && loadPrograms(full), ms); };
 
-async function loadPrograms() {
+async function loadPrograms(full = true) {
   let r;
-  try { r = await api('/api/programs'); } catch (e) { return toast(e.message, true); }
+  try { r = await api('/api/programs', { installed: full || !S.prog }); } catch (e) { return toast(e.message, true); }
+  if (!r.installed) r.installed = S.prog.installed;
+  // An uninstaller Shimmy started has just closed: the list is out of date.
+  const closed = S.prog?.uninstalling && !r.uninstalling;
   S.prog = r;
+  if (closed) return loadPrograms(true);
   const u = r.updates, run = r.updateRun;
   if (!u.at && !u.running && !u.error && !S.progAsked) {
     S.progAsked = true;
-    await api('/api/programs/check');
+    try { await api('/api/programs/check'); } catch (e) { toast(e.message, true); }
     return progSoon(300);
   }
   if (S.progWaiting && !run.running && run.result) {
@@ -1607,6 +1614,7 @@ async function loadPrograms() {
   }
   renderPrograms();
   if (u.running || run.running) progSoon();
+  else if (r.uninstalling) progSoon(3000);
 }
 
 function renderPrograms() {
@@ -1619,8 +1627,11 @@ function renderPrograms() {
   $('#progUpdates').innerHTML = missing
     ? '<div class="empty">winget, Windows’ app installer, is not on this PC, so Shimmy cannot list updates. It comes with App Installer from the Microsoft Store.</div>'
     : list.map((a) => `<div class="frow sys"><b>${esc(a.name)}<span class="where">${esc(a.version)} → ${esc(a.available)} · ${esc(a.id)}</span></b><span></span><span></span><button class="btn small ghost" data-app-update="${esc(a.id)}" ${run.running ? 'disabled' : ''}>Update</button></div>`).join('')
-      || `<div class="empty">${u.at ? 'Every app winget knows is up to date.' : 'Checking…'}</div>`;
+      || `<div class="empty">${u.at ? 'Every app winget knows is up to date.' : u.running ? 'Checking…' : u.error ? 'The check did not finish. Press Check for updates to try again.' : 'Not checked yet.'}</div>`;
+  // The installed list is rebuilt only when it or the filter changed, so polling does not reset hover or focus.
   const q = (S.progFilter || '').toLowerCase();
+  if (S.progDrawn?.list === installed && S.progDrawn.q === q) return;
+  S.progDrawn = { list: installed, q };
   const apps = installed.filter((a) => !q || a.name.toLowerCase().includes(q) || a.publisher.toLowerCase().includes(q));
   const max = Math.max(1, ...apps.map((a) => a.bytes || 0));
   $('#progList').innerHTML = apps.map((a) => {
@@ -1640,7 +1651,7 @@ function confirmAppUpdate(id) {
   $('#mOk').onclick = async () => {
     $('#modal').close();
     try { await api('/api/programs/update', { id }); S.progWaiting = true; } catch (e) { toast(e.message, true); }
-    loadPrograms();
+    loadPrograms(false);
   };
 }
 
@@ -1660,7 +1671,10 @@ function confirmUninstall(key, name) {
     try {
       const r = await api('/api/programs/uninstall', { key });
       toast(r.settings ? `Opened Installed apps. Find ${r.name} there.` : `Started ${r.name}’s uninstaller. The list updates when it has finished.`);
-      progSoon(20000);
+      // Shimmy's own uninstaller is watched until it closes (even one that closes before the first poll);
+      // Installed apps is not, so look again in 20 s.
+      if (!r.settings) S.prog.uninstalling = true;
+      progSoon(r.settings ? 20000 : 3000, !!r.settings);
     } catch (e) { toast(e.message, true); }
   };
 }
@@ -1673,7 +1687,9 @@ const tidy = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 async function loadSystem() {
   if (!S.hw) {
     $('#sysInfo').innerHTML = '<div class="empty">Asking Windows what is inside. This takes a few seconds…</div>';
-    try { S.hw = await api('/api/system'); } catch (e) { $('#sysInfo').innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+    // One question at a time: switching tabs quickly would otherwise start a second PowerShell inventory.
+    S.hwAsk ??= api('/api/system').finally(() => { S.hwAsk = null; });
+    try { S.hw = await S.hwAsk; } catch (e) { $('#sysInfo').innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
   }
   renderSystem();
 }
@@ -1687,7 +1703,8 @@ function sysGroups(h) {
     ['Processor', cpu.flatMap((c) => [
       [tidy(c.Name), `${c.NumberOfCores} cores, ${c.NumberOfLogicalProcessors} threads`],
       ['Rated clock', c.MaxClockSpeed ? `${ghz(c.MaxClockSpeed)} GHz` : '–'],
-      ['Cache', `L2 ${fmtB(c.L2CacheSize * 1024)}, L3 ${fmtB(c.L3CacheSize * 1024)}`],
+      // Windows reports the caches in KB, or not at all on some chips.
+      ['Cache', `L2 ${c.L2CacheSize ? fmtB(c.L2CacheSize * 1024) : 'not reported'}, L3 ${c.L3CacheSize ? fmtB(c.L3CacheSize * 1024) : 'not reported'}`],
       ['Socket', tidy(c.SocketDesignation) || '–'],
     ])],
     ['Memory', [
@@ -1784,7 +1801,10 @@ document.addEventListener('click', async (e) => {
   if (upd) return confirmAppUpdate(upd.dataset.appUpdate);
   const un = e.target.closest('[data-uninstall]');
   if (un) return confirmUninstall(un.dataset.uninstall, un.dataset.name);
-  if (e.target.id === 'progCheck') { await api('/api/programs/check'); return loadPrograms(); }
+  if (e.target.id === 'progCheck') {
+    try { await api('/api/programs/check'); } catch (err) { toast(err.message, true); }
+    return loadPrograms(false);
+  }
   if (e.target.id === 'appsOpen2') return api('/api/apps-settings').catch((err) => toast(err.message, true));
   const del = e.target.closest('[data-del]');
   if (del) return previewDelete(del.dataset.del);
@@ -1807,7 +1827,7 @@ document.addEventListener('click', async (e) => {
     return;
   }
   if (e.target.closest('[data-cool-start]')) return confirmCool();
-  if (e.target.closest('[data-cool-stop]')) return api('/api/cool/stop').then(refresh);
+  if (e.target.closest('[data-cool-stop]')) return api('/api/cool/stop').then(refresh, (err) => toast(err.message, true));
   if (e.target.id === 'sysCopy' && S.hw) {
     try { await navigator.clipboard.writeText(sysText(S.hw)); toast('Copied. Paste it into your bug report.'); } catch (err) { toast('Windows did not allow copying: ' + err.message, true); }
     return;

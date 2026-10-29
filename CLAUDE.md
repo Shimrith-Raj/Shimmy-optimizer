@@ -49,7 +49,7 @@ Recycle Bin route is `trash::delete_all`, used by `caches.rs`.
   start-up. Shutdown, a crash or a kill are covered only by the start-up restore.
 - **Sensors** (`sensors.rs`): the LibreHardwareMonitor sidecar `shimmy-sensors.exe` prints JSON rows every 2 s.
   `Shared::readings()` returns them while fresh (under 10 s). CPU temperature:
-  `sensors::value(rows, "Cpu", "Temperature", "Core (Tctl/Tdie)")`, with "Core (Tctl)" as the fallback. Clocks come
+  `sensors::cpu_temp(rows)` ("Core (Tctl/Tdie)", with "Core (Tctl)" as the fallback); every reader uses it. Clocks come
   from PDH (`cpu::Perf`) into `Shared.cpu_live`. Fans come from ASUS ATK only: `Shared::fans()`. `cpu::status` is the
   pure throttle verdict.
 - **DISM**: `clean::dism_analyze` and `dism_cleanup`, started from `start_dism` in `lib.rs`.
@@ -59,7 +59,7 @@ Recycle Bin route is `trash::delete_all`, used by `caches.rs`.
 - **Biggest folders**: `storage::scan_usage` builds a `Tree` (after `start_usage_scan`), and `storage_folder` returns
   `Folder {path, bytes, filesHere, children}`, capped at 40 children. Folder deletes go through `folder_delete`, gated by
   `storage::check_folder`.
-- **System queries** use no WMI yet. Command-line tools run hidden through `clean::hidden(exe, args)` (powercfg,
+- **System queries** use no WMI yet. Command-line tools run hidden through `clean::hidden(exe, args)`, or `clean::hidden_for` with a time limit for anything that can hang (winget) (powercfg,
   vssadmin, dism). Shimmy runs as administrator, so it never runs anything a standard user can plant: winget is run
   from its package folder (`programs::winget_exe`, not by name through PATH), and uninstallers only from HKLM (apps
   installed just for the user open Windows' Installed apps page, `programs::per_user`).
@@ -85,6 +85,6 @@ and is not the app version.
 
 ## Tests
 
-Run them in `app/src-tauri`: `SHIMMY_NO_ADMIN=1 CARGO_TARGET_DIR=target-dev cargo test`. That is 91 unit tests, plus 2 in
+Run them in `app/src-tauri`: `SHIMMY_NO_ADMIN=1 CARGO_TARGET_DIR=target-dev cargo test`. That is 94 unit tests, plus 2 in
 `tests/parity.rs`. The real-PC checks are `--test real_scan -- --ignored`. Every new gate or decision function gets unit
 tests in the same style.

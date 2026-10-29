@@ -97,6 +97,16 @@ pub fn verdict(samples: &[Sample], stop: &'static str, base: Option<f64>, boost_
   }
 }
 
+/// Sets the stop flag when dropped, so the load threads end even if the check's loop panics. jobs::start catches
+/// the panic and reports the job finished, and nothing else would stop the threads.
+pub struct StopOnDrop(pub Arc<AtomicBool>);
+
+impl Drop for StopOnDrop {
+  fn drop(&mut self) {
+    self.0.store(true, Ordering::SeqCst);
+  }
+}
+
 /// Starts one busy thread per logical processor; they run until `stop` is set.
 pub fn load(stop: &Arc<AtomicBool>) -> Vec<std::thread::JoinHandle<()>> {
   let n = std::thread::available_parallelism().map_or(4, |n| n.get());
@@ -155,5 +165,20 @@ mod tests {
     let early = verdict(&run(&[50.0, 60.0], 3500.0), "stopped", Some(3200.0), false);
     assert!(early.text.contains("too early"));
     assert_eq!(verdict(&[], "stopped", None, false).seconds, 0);
+  }
+
+  #[test]
+  fn load_stops_even_after_a_panic() {
+    let stop = Arc::new(AtomicBool::new(false));
+    let threads = load(&stop);
+    let s2 = stop.clone();
+    let _ = std::panic::catch_unwind(move || {
+      let _guard = StopOnDrop(s2);
+      panic!("the check's loop failed");
+    });
+    assert!(stop.load(Ordering::SeqCst), "the guard set the flag while unwinding");
+    for t in threads {
+      t.join().unwrap();
+    }
   }
 }
