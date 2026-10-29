@@ -4,13 +4,18 @@ pub mod autostart;
 pub mod battery;
 pub mod caches;
 pub mod clean;
+pub mod cool;
 pub mod cpu;
 pub mod finder;
 pub mod gpu;
 pub mod heat;
 pub mod hold;
+pub mod hw;
 pub mod jobs;
+pub mod power;
+pub mod prio;
 pub mod procs;
+pub mod programs;
 pub mod sensors;
 pub mod storage;
 pub mod startup;
@@ -23,7 +28,7 @@ use procs::{build_groups, classify, recommend, Marks};
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use store::Store;
@@ -85,6 +90,20 @@ pub struct Shared {
   update_total: AtomicU64,
   /// One check at a time, whether it came from the button or the daily timer.
   update_busy: AtomicBool,
+  /// The charger state power mode last acted on (power.rs), so it switches only when that changes.
+  power_last: Mutex<Option<bool>>,
+  /// The cooling check (cool.rs) and its Stop button.
+  cool: jobs::Slot<cool::Verdict>,
+  cool_stop: Arc<AtomicBool>,
+  /// The System page's hardware list (hw.rs), read once.
+  hw_info: Mutex<Option<Value>>,
+  /// Programs page (programs.rs): winget's list of updates (None inside when winget is missing), the one update
+  /// running, and the one uninstaller Shimmy started.
+  app_updates: jobs::Slot<Option<Vec<programs::Upgrade>>>,
+  app_update_run: jobs::Slot<Value>,
+  uninstaller: Mutex<Option<std::process::Child>>,
+  /// Processes Shimmy lowered (prio.rs), so each can be put back.
+  prio_applied: Mutex<prio::Applied>,
   settings: Mutex<Settings>,
   settings_path: PathBuf,
 }
@@ -106,11 +125,18 @@ struct Settings {
   heat: heat::HeatPrefs,
   /// The daily check for a new version (update.rs).
   updates: auto::UpdatePrefs,
+  /// Power mode follows the charger (power.rs).
+  power: power::PowerPrefs,
+  /// When Shimmy last made a restore point (ms). Kept by Shimmy.
+  restore_point_at: u64,
   /// The user accepted the warning that ASUS firmware writes were not tested on this model. Kept by Shimmy.
   asus_untested_ok: bool,
   /// Per-app marks by lower-case exe name (procs.rs). Changed only by `set_app_mark`; kept by Shimmy.
   #[serde(deserialize_with = "procs::lenient_marks")]
   app_marks: Marks,
+  /// Background priority by lower-case exe name (prio.rs). Changed only by `set_priority`; kept by Shimmy.
+  #[serde(deserialize_with = "prio::lenient")]
+  priorities: BTreeMap<String, prio::Level>,
 }
 
 /// Starts the error a firmware write returns on an untested model before the user's OK; the page shows the warning.
@@ -246,6 +272,47 @@ impl Shared {
     }
   }
 
+  /// Puts back the power mode Shimmy changed. Used when "follows the charger" is turned off, at Exit, and at start-up
+  /// when Shimmy was closed without putting it back.
+  fn restore_power(&self, why: &str) {
+    let Some(saved) = self.settings.lock().unwrap().power.saved.clone() else { return };
+    *self.power_last.lock().unwrap() = None;
+    let clear = || {
+      self.settings.lock().unwrap().power.saved = None;
+      self.save_settings();
+    };
+    let Some(g) = power::from_text(&saved) else { return clear() };
+    match power::set(g) {
+      Ok(()) => {
+        clear();
+        self.store.log("power-mode", power::label(g), &format!("put back: {why}"));
+      }
+      Err(e) => self.store.log("power-mode-failed", power::label(g), &e),
+    }
+  }
+
+  /// A restore point before a change the Recycle Bin cannot undo, at most one a day (Windows' own limit). Logged either
+  /// way; returns a line for the page.
+  fn restore_point_first(&self, before: &str) -> String {
+    let now = store::now_ms();
+    if now.saturating_sub(self.settings.lock().unwrap().restore_point_at) < 86_400_000 {
+      self.store.log("restore-point-skipped", before, "Shimmy made one in the last 24 hours; Windows makes at most one a day");
+      return "Shimmy made a restore point in the last 24 hours, so it did not make another.".into();
+    }
+    match clean::restore_point(before) {
+      Ok(()) => {
+        self.settings.lock().unwrap().restore_point_at = now;
+        self.save_settings();
+        self.store.log("restore-point", before, "made by System Restore before the change");
+        "Windows made a restore point first.".into()
+      }
+      Err(e) => {
+        self.store.log("restore-point-failed", before, &e);
+        format!("No restore point: {e}")
+      }
+    }
+  }
+
   /// The standard folders the user has not turned off, then the ones they added.
   fn finder_roots(&self) -> Vec<PathBuf> {
     let f = self.settings.lock().unwrap().finder.clone();
@@ -273,6 +340,8 @@ impl Shared {
     jobs::clear(&self.finder);
     jobs::clear(&self.cache_scan);
     jobs::clear(&self.cache_run);
+    jobs::clear(&self.cool);
+    *self.hw_info.lock().unwrap() = None;
     *self.battery_report.lock().unwrap() = None;
     *self.nvml.lock().unwrap() = None;
     *self.gpu_counters.lock().unwrap() = None;
@@ -444,7 +513,7 @@ async fn get_state(s: State<'_, Shr>) -> Result<Value, String> {
     let heat = s.settings.lock().unwrap().heat.clone();
     let heat = json!({ "enabled": heat.enabled, "boostOff": heat.saved.is_some(), "since": heat.saved.map(|b| b.since), "hotC": heat::HOT_C, "coolC": heat::COOL_C });
     let fan_mode = s.atk.as_ref().and_then(|a| a.fan_mode());
-    json!({ "mem": mem, "groups": groups, "marks": marks, "recs": recs, "home": home, "cpu": cpu, "batteryHealth": battery_health, "plugged": plugged, "selfMB": self_mb, "fanMode": fan_mode, "heat": heat, "updateAvailable": update_available, "at": store::now_ms() })
+    json!({ "mem": mem, "groups": groups, "marks": marks, "recs": recs, "home": home, "cpu": cpu, "batteryHealth": battery_health, "plugged": plugged, "selfMB": self_mb, "fanMode": fan_mode, "heat": heat, "updateAvailable": update_available, "cool": job_json(&s.cool), "priorities": s.settings.lock().unwrap().priorities.clone(), "at": store::now_ms() })
   })
   .await
   .map_err(|e| e.to_string())
@@ -649,6 +718,7 @@ async fn folder_delete(s: State<'_, Shr>, path: String, permanent: bool, allow_b
       return Ok(json!({ "needsConfirm": true, "bytes": c.bytes }));
     }
     let gone_for_good = permanent || c.bytes > finder::bin_capacity(&p);
+    let restore = gone_for_good.then(|| s.restore_point_first("deleting a folder for good"));
     if permanent {
       std::fs::remove_dir_all(&p).map_err(|e| format!("Windows could not delete it: {e}"))?;
     } else {
@@ -659,7 +729,7 @@ async fn folder_delete(s: State<'_, Shr>, path: String, permanent: bool, allow_b
     if let Some(t) = s.tree.lock().unwrap().as_mut() {
       t.remove(&p);
     }
-    Ok(json!({ "deleted": true, "bytes": c.bytes, "permanent": gone_for_good }))
+    Ok(json!({ "deleted": true, "bytes": c.bytes, "permanent": gone_for_good, "restorePoint": restore }))
   })
   .await
 }
@@ -708,7 +778,7 @@ async fn get_restore_points() -> Result<Value, String> {
   .map_err(|e| e.to_string())?
 }
 
-/// Windows' own Installed apps page; Shimmy never uninstalls anything itself.
+/// Windows' own Installed apps page, for Store apps and anything the Programs page does not list.
 #[tauri::command]
 fn open_apps_settings() -> Result<(), String> {
   std::process::Command::new("explorer.exe").arg("ms-settings:appsfeatures").spawn().map(|_| ()).map_err(|e| e.to_string())
@@ -780,7 +850,16 @@ fn run_clean(s: &Shr, ids: Vec<String>, weekly: Option<AppHandle>) -> bool {
 fn start_dism(s: State<'_, Shr>, cleanup: bool) -> bool {
   let s2 = s.inner().clone();
   jobs::start(&s.dism, move |progress| {
-    let r = if cleanup { clean::dism_cleanup(&progress) } else { clean::dism_analyze(&progress) };
+    let r = if cleanup {
+      progress.set("Making a restore point");
+      let note = s2.restore_point_first("Windows update backups clean-up");
+      clean::dism_cleanup(&progress).map(|mut d| {
+        d.summary = format!("{} {note}", d.summary);
+        d
+      })
+    } else {
+      clean::dism_analyze(&progress)
+    };
     if cleanup {
       s2.store.log("dism-cleanup", "Component store", &r.as_ref().map(|d| d.summary.clone()).unwrap_or_else(|e| e.clone()));
     }
@@ -814,6 +893,7 @@ async fn finder_delete(s: State<'_, Shr>, paths: Vec<String>, allow_permanent: b
     if !big.is_empty() && !allow_permanent {
       return Ok(json!({ "needsConfirm": big.iter().map(|(p, b)| json!({ "path": p, "bytes": b })).collect::<Vec<_>>(), "refused": refused }));
     }
+    let restore = (!big.is_empty()).then(|| s.restore_point_first("deleting files too big for the Recycle Bin"));
     let (mut recycled, mut recycled_bytes, mut permanent, mut permanent_bytes, mut failed, mut gone) = (0, 0u64, 0, 0u64, Vec::new(), HashSet::new());
     for (p, b) in &fits {
       match trash::delete(p) {
@@ -846,7 +926,7 @@ async fn finder_delete(s: State<'_, Shr>, paths: Vec<String>, allow_permanent: b
       }
       found.dups.retain(|g| g.files.len() > 1);
     }
-    Ok(json!({ "recycled": recycled, "recycledBytes": recycled_bytes, "permanent": permanent, "permanentBytes": permanent_bytes, "failed": failed, "refused": refused }))
+    Ok(json!({ "recycled": recycled, "recycledBytes": recycled_bytes, "permanent": permanent, "permanentBytes": permanent_bytes, "failed": failed, "refused": refused, "restorePoint": restore }))
   })
   .await
 }
@@ -1042,7 +1122,7 @@ fn heat_watch(s: &Shared, now: u64) {
     let st = s.settings.lock().unwrap();
     (st.heat.enabled, st.heat.saved.is_some())
   };
-  let temp = s.readings().0.and_then(|r| sensors::value(&r, "Cpu", "Temperature", "Core (Tctl/Tdie)"));
+  let temp = s.readings().0.and_then(|r| sensors::cpu_temp(&r));
   let action = s.heat_watch.lock().unwrap().step(enabled, boost_off, temp, now);
   match action {
     Some(heat::Action::BoostOff) => match heat::boost_off(now) {
@@ -1071,6 +1151,360 @@ fn heat_watch(s: &Shared, now: u64) {
   }
 }
 
+/// Power mode follows the charger, every 3 s. It acts only when the charger is plugged in or pulled out (power::decide),
+/// and saves the mode it found the first time, so Exit can put it back.
+fn power_watch(s: &Shared) {
+  let (p, boost_off) = {
+    let st = s.settings.lock().unwrap();
+    (st.power.clone(), st.heat.saved.is_some())
+  };
+  if !p.follow {
+    return;
+  }
+  let plugged = system::battery_now().plugged;
+  let Some(on_charger) = power::decide(p.follow, boost_off, plugged, *s.power_last.lock().unwrap()) else { return };
+  *s.power_last.lock().unwrap() = Some(on_charger);
+  let want = power::guid_of(if on_charger { &p.plugged } else { &p.battery });
+  let before = power::current();
+  if before == Some(want) {
+    return;
+  }
+  let side = if on_charger { "charger plugged in" } else { "on battery" };
+  match power::set(want) {
+    Ok(()) => {
+      {
+        let mut st = s.settings.lock().unwrap();
+        if st.power.saved.is_none() {
+          st.power.saved = before.map(power::to_text);
+        }
+      }
+      s.save_settings();
+      s.store.log("power-mode", power::label(want), &format!("{side}; was {}", before.map(power::label).unwrap_or("unknown")));
+    }
+    Err(e) => s.store.log("power-mode-failed", power::label(want), &e),
+  }
+}
+
+// ---------- Cooling check ----------
+
+/// Full load on every logical processor for `seconds` (60 to 120), watched every second. Refused without a temperature
+/// reading, since then it could not stop at 95 °C.
+#[tauri::command]
+fn start_cool_check(s: State<'_, Shr>, seconds: u32) -> Result<bool, String> {
+  match s.readings().0.as_deref().and_then(sensors::cpu_temp) {
+    None => return Err("The cooling check needs the processor's temperature, so it can stop at 95 °C, and Shimmy cannot read it right now.".into()),
+    Some(t) if t >= cool::STOP_C - 10.0 => return Err(format!("The processor is already at {t:.0} °C. Let it cool down first.")),
+    _ => {}
+  }
+  let limit = cool::clamp_secs(seconds) as u64 * 1000;
+  // A second Start while a check runs (or is still stopping) must not clear its Stop.
+  if s.cool.lock().unwrap().running {
+    return Ok(false);
+  }
+  s.cool_stop.store(false, Ordering::SeqCst);
+  let s2 = s.inner().clone();
+  Ok(jobs::start(&s.cool, move |progress| {
+    let started = store::now_ms();
+    let load = cool::load(&s2.cool_stop);
+    // The load threads stop when this goes out of scope, even if the loop below panics.
+    let _stop = cool::StopOnDrop(s2.cool_stop.clone());
+    let (mut samples, mut no_temp, mut boost_off) = (Vec::new(), 0u64, false);
+    let stop = loop {
+      std::thread::sleep(Duration::from_secs(1));
+      let t_ms = store::now_ms().saturating_sub(started);
+      let rows = s2.readings().0;
+      let live = s2.cpu_live.lock().unwrap().clone();
+      let v = cpu::build(String::new(), &s2.topology, &live, s2.base_mhz, rows.as_deref(), s2.fans(), None);
+      no_temp = if v.temp_c.is_some() { 0 } else { no_temp + 1000 };
+      boost_off |= s2.settings.lock().unwrap().heat.saved.is_some();
+      samples.push(cool::Sample { t_ms, temp: v.temp_c, clock: v.avg_clock_mhz, watts: v.package_w, fan: v.fans.iter().map(|f| f.rpm).max() });
+      let deg = v.temp_c.map(|t| format!("{t:.0} °C")).unwrap_or_else(|| "no temperature".into());
+      let clk = v.avg_clock_mhz.map(|c| format!(", {:.1} GHz", c / 1000.0)).unwrap_or_default();
+      progress.set(format!("{} s of {}, {deg}{clk}", t_ms / 1000, limit / 1000));
+      if let Some(why) = cool::stop_reason(t_ms, limit, v.temp_c, no_temp, s2.cool_stop.load(Ordering::SeqCst)) {
+        break why;
+      }
+    };
+    s2.cool_stop.store(true, Ordering::SeqCst);
+    for h in load {
+      let _ = h.join();
+    }
+    let v = cool::verdict(&samples, stop, s2.base_mhz, boost_off);
+    s2.store.log("cooling-check", &format!("{} s, peak {}", v.seconds, v.peak_c.map(|t| format!("{t:.0} °C")).unwrap_or_else(|| "unknown".into())), &v.text);
+    Ok(v)
+  }))
+}
+
+#[tauri::command]
+fn stop_cool_check(s: State<'_, Shr>) -> bool {
+  s.cool_stop.store(true, Ordering::SeqCst);
+  true
+}
+
+// ---------- Programs: installed apps, updates, background priority ----------
+
+fn uninstaller_open(s: &Shared) -> bool {
+  s.uninstaller.lock().unwrap().as_mut().is_some_and(|c| matches!(c.try_wait(), Ok(None)))
+}
+
+#[tauri::command]
+async fn get_programs(s: State<'_, Shr>, installed: Option<bool>) -> Result<Value, String> {
+  let s = s.inner().clone();
+  tauri::async_runtime::spawn_blocking(move || {
+    // The page polls every 1.5 s while winget runs; it asks for the installed list (a full registry read) only
+    // when that list can have changed.
+    let list = installed.unwrap_or(true).then(programs::list);
+    json!({ "installed": list, "updates": job_json(&s.app_updates), "updateRun": job_json(&s.app_update_run), "uninstalling": uninstaller_open(&s) })
+  })
+  .await
+  .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn check_app_updates(s: State<'_, Shr>) -> bool {
+  jobs::start(&s.app_updates, |progress| {
+    progress.set("Asking winget");
+    programs::upgrades()
+  })
+}
+
+/// Updates one app that winget listed, after the page's confirm. One at a time, logged either way.
+#[tauri::command]
+fn start_app_update(s: State<'_, Shr>, id: String) -> Result<bool, String> {
+  let listed = s.app_updates.lock().unwrap().result.clone().flatten().unwrap_or_default();
+  let app = listed.into_iter().find(|u| u.id == id).ok_or("Check for updates first: Shimmy only updates apps winget listed.")?;
+  if s.app_update_run.lock().unwrap().running {
+    return Err("Another update is still running. They go one at a time.".into());
+  }
+  let s2 = s.inner().clone();
+  Ok(jobs::start(&s.app_update_run, move |progress| {
+    progress.set(format!("Updating {}", app.name));
+    let r = programs::upgrade(&app.id);
+    let target = format!("{} {}", app.name, app.available);
+    match &r {
+      Ok(()) => {
+        s2.store.log("app-update", &target, &format!("winget upgrade --id {} --exact, from {}", app.id, app.version));
+        if let Some(Some(list)) = s2.app_updates.lock().unwrap().result.as_mut() {
+          list.retain(|u| u.id != app.id);
+        }
+      }
+      Err(e) => s2.store.log("app-update-failed", &target, e),
+    }
+    Ok(json!({ "id": app.id, "name": app.name, "ok": r.is_ok(), "message": r.err() }))
+  }))
+}
+
+/// Windows' Installed apps page. Handed to File Explorer, which passes it to the user's own shell, so Settings runs with
+/// the user's rights and not Shimmy's.
+fn open_installed_apps() -> Result<(), String> {
+  let explorer = clean::known("SystemRoot").ok_or("Windows did not name its folder.")?.join("explorer.exe");
+  std::process::Command::new(explorer).arg("ms-settings:appsfeatures").spawn().map(drop).map_err(|e| format!("Could not open Installed apps: {e}"))
+}
+
+/// Starts an installed app's own uninstaller, read from the registry for this key. Apps installed just for this user
+/// open Windows' Installed apps page instead (programs::per_user). One at a time; its own window asks
+/// the rest, and Shimmy does not wait for it.
+#[tauri::command]
+async fn uninstall_app(s: State<'_, Shr>, key: String) -> Result<Value, String> {
+  use std::os::windows::process::CommandExt;
+  let s = s.inner().clone();
+  tauri::async_runtime::spawn_blocking(move || {
+    if programs::per_user(&key) {
+      let name = programs::name_of(&key)?;
+      open_installed_apps()?;
+      s.store.log("uninstall", &name, "installed just for this user: opened Windows' Installed apps page");
+      return Ok(json!({ "name": name, "settings": true }));
+    }
+    // Held from the check to the start, so two quick clicks cannot start two uninstallers.
+    let mut slot = s.uninstaller.lock().unwrap();
+    if slot.as_mut().is_some_and(|c| matches!(c.try_wait(), Ok(None))) {
+      return Err("Another uninstaller is still open. Finish that one first.".to_string());
+    }
+    let (name, exe, args) = programs::uninstall_command(&key)?;
+    let mut cmd = std::process::Command::new(&exe);
+    if !args.is_empty() {
+      cmd.raw_arg(&args);
+    }
+    let child = cmd.spawn().map_err(|e| format!("Windows could not start its uninstaller: {e}"))?;
+    *slot = Some(child);
+    drop(slot);
+    s.store.log("uninstall", &name, &format!("started its own uninstaller: {exe} {args}"));
+    Ok(json!({ "name": name }))
+  })
+  .await
+  .map_err(|e| e.to_string())?
+}
+
+/// Sets an app's background priority: "below", "low", "eco", or "normal" to put it back. Refused for anything Shimmy
+/// protects for a built-in reason, the same gate as marking an app Safe.
+#[tauri::command]
+async fn set_priority(s: State<'_, Shr>, exes: Vec<String>, level: String) -> Result<Value, String> {
+  let s = s.inner().clone();
+  tauri::async_runtime::spawn_blocking(move || {
+    let level = prio::parse_level(&level)?;
+    let procs_now = system::list_procs(&mut s.sys.lock().unwrap());
+    let own = system::own_pids(&procs_now);
+    let mut keys = Vec::new();
+    for e in exes.iter().take(50) {
+      let k = procs::exe_key(e)?;
+      let running_why = || procs_now.iter().filter(|p| p.name.eq_ignore_ascii_case(&k)).map(|p| classify(p, &own, &Marks::new())).find(|c| c.builtin).and_then(|c| c.reason);
+      if level.is_some() {
+        if let Some(why) = procs::builtin_reason(&k).or_else(running_why) {
+          return Err(format!("{k} keeps its priority: {why}."));
+        }
+      }
+      keys.push(k);
+    }
+    {
+      let mut st = s.settings.lock().unwrap();
+      // Checked before anything changes, so a refused request leaves the list as it was.
+      if level.is_some() && st.priorities.len() + keys.iter().filter(|k| !st.priorities.contains_key(*k)).count() > 100 {
+        return Err("Up to 100 apps can have a background priority.".into());
+      }
+      for k in &keys {
+        match level {
+          Some(l) => st.priorities.insert(k.clone(), l),
+          None => st.priorities.remove(k),
+        };
+      }
+    }
+    s.save_settings();
+    for k in &keys {
+      s.store.log("priority", k, level.map_or("normal again", |l| l.words()));
+    }
+    prio_watch(&s);
+    Ok(json!({ "priorities": s.settings.lock().unwrap().priorities.clone() }))
+  })
+  .await
+  .map_err(|e| e.to_string())?
+}
+
+/// Background priority, every 30 s and when the list changes: new processes of a listed app get its level, and
+/// processes of an app taken off the list are put back. Protected processes are never touched.
+fn prio_watch(s: &Shared) {
+  let wanted = s.settings.lock().unwrap().priorities.clone();
+  let mut applied = s.prio_applied.lock().unwrap();
+  if wanted.is_empty() && applied.is_empty() {
+    return;
+  }
+  let procs_now = system::list_procs(&mut s.sys.lock().unwrap());
+  let own = system::own_pids(&procs_now);
+  let running: Vec<(u32, String)> = procs_now.iter().filter(|p| !classify(p, &own, &Marks::new()).builtin).map(|p| (p.pid, p.name.to_lowercase())).collect();
+  // Exited processes are forgotten. Windows reuses process ids, so an entry is kept only while the same id still runs
+  // the same exe: another app that got the id is then neither skipped nor "put back".
+  applied.retain(|pid, a| running.iter().any(|(p, exe)| p == pid && *exe == a.0));
+  let (set, back) = prio::plan(&running, &wanted, &applied);
+  let (mut lowered, mut restored): (BTreeMap<String, usize>, BTreeMap<String, usize>) = Default::default();
+  for (pid, level) in set {
+    let exe = running.iter().find(|r| r.0 == pid).map(|r| r.1.clone()).unwrap_or_default();
+    if let Ok(prev) = prio::apply(pid, level) {
+      let orig = applied.get(&pid).map_or(prio::original(prev), |a| a.1);
+      applied.insert(pid, (exe.clone(), orig, level));
+      *lowered.entry(exe).or_default() += 1;
+    }
+  }
+  for pid in back {
+    if let Some((exe, old, _)) = applied.remove(&pid) {
+      prio::revert(pid, old);
+      *restored.entry(exe).or_default() += 1;
+    }
+  }
+  for (exe, n) in lowered {
+    let words = wanted.get(&exe).map_or("", |l| l.words());
+    s.store.log("priority-set", &exe, &format!("{n} process{} set to {words}", if n == 1 { "" } else { "es" }));
+  }
+  for (exe, n) in restored {
+    s.store.log("priority-restored", &exe, &format!("{n} process{} back to the priority {} had", if n == 1 { "" } else { "es" }, if n == 1 { "it" } else { "they" }));
+  }
+}
+
+/// Puts every process Shimmy lowered back, at Exit.
+fn restore_priorities(s: &Shared) {
+  let applied: Vec<_> = s.prio_applied.lock().unwrap().drain().collect();
+  if applied.is_empty() {
+    return;
+  }
+  // Only a process that still runs the same exe: its id may have gone to another app since the last 30 s check.
+  let procs_now = system::list_procs(&mut s.sys.lock().unwrap());
+  let same = |pid: u32, exe: &str| procs_now.iter().any(|p| p.pid == pid && p.name.eq_ignore_ascii_case(exe));
+  let back = applied.iter().filter(|(pid, (exe, old, _))| same(*pid, exe) && prio::revert(*pid, *old)).count();
+  s.store.log("priority-restored", "all", &format!("{back} of {} processes put back: Shimmy exited", applied.len()));
+}
+
+// ---------- System info and exports ----------
+
+/// The System page: what is inside this PC (hw.rs). Read once, then kept until the window closes.
+#[tauri::command]
+async fn get_system_info(s: State<'_, Shr>) -> Result<Value, String> {
+  let s = s.inner().clone();
+  tauri::async_runtime::spawn_blocking(move || {
+    if let Some(v) = s.hw_info.lock().unwrap().clone() {
+      return Ok(v);
+    }
+    let mut v = hw::read()?;
+    v["shimmy"] = json!(update::CURRENT);
+    *s.hw_info.lock().unwrap() = Some(v.clone());
+    Ok(v)
+  })
+  .await
+  .map_err(|e| e.to_string())?
+}
+
+/// Local date and time for file names, such as 2026-10-29 143205.
+fn local_stamp() -> String {
+  let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+  format!("{:04}-{:02}-{:02} {:02}{:02}{:02}", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond)
+}
+
+/// Saves a CSV to Downloads and shows it in File Explorer: the finder's results ("finder"), a folder's biggest folders
+/// ("folders": `path`, or your folder), or the whole Log ("log").
+#[tauri::command]
+async fn export_csv(app: AppHandle, s: State<'_, Shr>, what: String, path: Option<String>) -> Result<Value, String> {
+  let s = s.inner().clone();
+  let dir = app.path().download_dir().map_err(|e| e.to_string())?;
+  tauri::async_runtime::spawn_blocking(move || {
+    let row = store::export_row;
+    let (label, body) = match what.as_str() {
+      "finder" => {
+        let j = s.finder.lock().unwrap();
+        let f = j.result.as_ref().ok_or("Look for big and duplicate files first.")?;
+        let item = |group: &str, i: &finder::Item| row(&[group, &i.name, &i.folder, &i.path, &i.bytes.to_string(), &store::iso(i.modified)]);
+        let mut b = row(&["group", "name", "folder", "path", "bytes", "modified"]);
+        for (n, g) in f.dups.iter().enumerate() {
+          for i in &g.files {
+            b += &item(&format!("duplicate set {}", n + 1), i);
+          }
+        }
+        f.large.iter().for_each(|i| b += &item("large", i));
+        f.installers.iter().for_each(|i| b += &item("old installer", i));
+        ("big and duplicate files", b)
+      }
+      "folders" => {
+        let tree = s.tree.lock().unwrap();
+        let p = path.map(PathBuf::from).unwrap_or_else(|| s.profile.clone());
+        let f = tree.as_ref().and_then(|t| storage::folder(t, &p)).ok_or("Measure C: on the Storage page first.")?;
+        let mut b = row(&["name", "path", "bytes"]);
+        f.children.iter().for_each(|c| b += &row(&[&c.name, &c.path, &c.bytes.to_string()]));
+        if f.files_here > 0 {
+          b += &row(&["(files directly in this folder)", &f.path, &f.files_here.to_string()]);
+        }
+        ("biggest folders", b)
+      }
+      "log" => ("log", s.store.export_log().ok_or("Nothing has been logged yet.")?),
+      _ => return Err("Shimmy does not know that export.".to_string()),
+    };
+    let name = format!("Shimmy {label} {}.csv", local_stamp());
+    let file = dir.join(&name);
+    // The byte-order mark makes Excel read the file as UTF-8.
+    std::fs::write(&file, format!("\u{feff}{body}")).map_err(|e| format!("Could not save it to Downloads: {e}"))?;
+    s.store.log("export", &name, &format!("saved to {}", dir.display()));
+    let _ = std::process::Command::new("explorer.exe").arg(format!("/select,{}", file.display())).spawn();
+    Ok(json!({ "name": name }))
+  })
+  .await
+  .map_err(|e| e.to_string())?
+}
+
 // ---------- Settings ----------
 
 fn settings_json(s: &Shared) -> Value {
@@ -1082,6 +1516,7 @@ fn settings_json(s: &Shared) -> Value {
     "defaultRoots": s.default_roots,
     "categories": clean::categories().into_iter().map(|(id, title)| json!({ "id": id, "title": title })).collect::<Vec<_>>(),
     "nextWeekly": next,
+    "powerMode": power::current().map(power::label),
   })
 }
 
@@ -1104,24 +1539,46 @@ fn check_root(p: &Path) -> Result<(), String> {
   Ok(())
 }
 
+/// Every range and gate on settings, for the page's copy and for settings.json at start-up alike: the file is in the
+/// user's own folder, so any program could have edited it, and Shimmy acts on it as administrator (a charge limit written
+/// to the firmware, a plan GUID passed to powercfg, folders the finder searches). Out-of-range values are pulled back
+/// into range; finder folders that fail `check_root` and an unreadable saved plan are dropped.
+fn sanitize(st: &mut Settings) {
+  auto::clamp(&mut st.alerts, &mut st.auto_clean, &mut st.weekly, &mut st.finder, &mut st.updates);
+  st.caches.age_days = st.caches.age_days.clamp(1, 365);
+  power::clamp(&mut st.power);
+  st.finder.extra_roots.retain(|r| check_root(Path::new(r)).is_ok());
+  st.charge_limit = st.charge_limit.filter(|p| (50..=100).contains(p));
+  if st.plugged.on {
+    st.plugged.hold_pct = st.plugged.hold_pct.clamp(hold::FLOOR, 100);
+  }
+  if st.heat.saved.as_ref().is_some_and(|b| !heat::valid_scheme(&b.scheme)) {
+    st.heat.saved = None;
+  }
+}
+
 #[tauri::command]
 async fn set_settings(s: State<'_, Shr>, settings: Value) -> Result<Value, String> {
   let s = s.inner().clone();
   tauri::async_runtime::spawn_blocking(move || {
     let mut new: Settings = serde_json::from_value(settings).map_err(|e| format!("Settings not understood: {e}"))?;
-    auto::clamp(&mut new.alerts, &mut new.auto_clean, &mut new.weekly, &mut new.finder, &mut new.updates);
-    new.caches.age_days = new.caches.age_days.clamp(1, 365);
+    // A folder the user just added is refused out loud; `sanitize` drops bad ones silently.
     for r in &new.finder.extra_roots {
-      check_root(Path::new(r))?;
+      check_root(Path::new(r.trim()))?;
     }
-    {
+    sanitize(&mut new);
+    let (follow_was, follow_now, modes_changed) = {
       let mut cur = s.settings.lock().unwrap();
+      let p = (cur.power.follow, new.power.follow, cur.power.plugged != new.power.plugged || cur.power.battery != new.power.battery);
       // Kept by Shimmy, not by the page.
+      new.power.saved = cur.power.saved.clone();
+      new.restore_point_at = cur.restore_point_at;
       new.charge_limit = cur.charge_limit;
       new.plugged = cur.plugged.clone();
       new.heat.saved = cur.heat.saved.clone();
       new.asus_untested_ok = cur.asus_untested_ok;
       new.app_marks = cur.app_marks.clone();
+      new.priorities = cur.priorities.clone();
       new.weekly.last_run = cur.weekly.last_run;
       new.updates = auto::UpdatePrefs { auto_check: new.updates.auto_check, ..cur.updates.clone() };
       // Turning the weekly clean on, or moving it, counts from now, so a slot already in the past does not fire at once.
@@ -1130,8 +1587,15 @@ async fn set_settings(s: State<'_, Shr>, settings: Value) -> Result<Value, Strin
         new.weekly.last_run = store::now_ms();
       }
       *cur = new;
-    }
+      p
+    };
     s.save_settings();
+    if follow_was && !follow_now {
+      s.restore_power("power mode follows the charger turned off");
+    } else if follow_now && (!follow_was || modes_changed) {
+      // Applies the new choice on the next tick instead of at the next plug change.
+      *s.power_last.lock().unwrap() = None;
+    }
     Ok(settings_json(&s))
   })
   .await
@@ -1408,6 +1872,8 @@ fn update_tray(app: &AppHandle, last: &AtomicU64) {
 fn exit_app(app: &AppHandle) {
   let s = app.state::<Shr>();
   s.restore_boost("Shimmy exited");
+  s.restore_power("Shimmy exited");
+  restore_priorities(&s);
   s.store.save();
   app.exit(0);
 }
@@ -1469,7 +1935,7 @@ fn alert(app: &AppHandle, s: &Shared, title: &str, body: &str) {
   s.store.log("alert", title, body);
 }
 
-/// Alerts, the automatic memory clean and the weekly clean. Called by the sampler every 3 s.
+/// Alerts, the automatic memory clean, the weekly clean and power mode. Called by the sampler every 3 s.
 fn automation(app: &AppHandle, s: &Shr, tick: u64) {
   const MIN: u64 = 60_000;
   let now = store::now_ms();
@@ -1477,13 +1943,17 @@ fn automation(app: &AppHandle, s: &Shr, tick: u64) {
   let m = system::mem_now();
   plugged_watch(app, s, now);
   heat_watch(s, now);
+  power_watch(s);
+  if tick % 10 == 5 {
+    prio_watch(s);
+  }
   let mut w = s.watch.lock().unwrap();
   if st.alerts.enabled {
     let a = &st.alerts;
     if w.ram.step(m.pct >= a.ram_pct as u64, now, MIN, 30 * MIN) {
       alert(app, s, "Memory is nearly full", &format!("{}% in use for over a minute. Open Shimmy to see what to close.", m.pct));
     }
-    let temp = s.readings().0.and_then(|r| sensors::value(&r, "Cpu", "Temperature", "Core (Tctl/Tdie)"));
+    let temp = s.readings().0.and_then(|r| sensors::cpu_temp(&r));
     if w.cpu.step(temp.is_some_and(|t| t >= a.cpu_temp_c as f64), now, 30_000, 30 * MIN) {
       alert(app, s, "The processor is running hot", &format!("{:.0} °C for half a minute. Check the vents are clear and nothing is stuck at full load.", temp.unwrap_or(0.0)));
     }
@@ -1505,6 +1975,18 @@ fn automation(app: &AppHandle, s: &Shr, tick: u64) {
     tray_clean(app.clone(), c.level != "clean", true);
   }
   drop(w);
+  // The junk alert measures the Clean page's ticked categories hourly, on its own thread: it walks the temp folders.
+  if st.alerts.enabled && st.alerts.junk_gb > 0 && tick % 1200 == 300 && !s.clean_run.lock().unwrap().running {
+    let (app, s, gb) = (app.clone(), s.clone(), st.alerts.junk_gb);
+    std::thread::spawn(move || {
+      let cats = clean::scan(&s.running(), &jobs::Progress::new(|_| {}));
+      // Only what Clean would really clean now: a cache whose app is open is skipped there, so it is not counted here.
+      let bytes: u64 = cats.iter().filter(|c| c.default_on && c.blocked.is_none()).map(|c| c.bytes).sum();
+      if s.watch.lock().unwrap().junk.step(auto::junk_over(bytes, gb), store::now_ms(), 0, 24 * 60 * MIN) {
+        alert(&app, &s, "Junk to clean", &format!("{} of temporary files and caches can be cleaned. The Clean page shows what, and cleans it when you say.", fmt_mb((bytes / 1_048_576) as i64)));
+      }
+    });
+  }
   // The daily update check runs on its own thread: it waits on the network.
   if tick % 20 == 15 && auto::update_due(&st.updates, now) && !s.update_busy.swap(true, Ordering::SeqCst) {
     let (app, s) = (app.clone(), s.clone());
@@ -1546,7 +2028,7 @@ fn start_sampler(app: AppHandle) {
       if tick % 3 == 0 {
         s.store.sample(system::mem_now().used_mb);
         let load = s.cpu_live.lock().unwrap().total;
-        let temp = s.readings().0.and_then(|r| sensors::value(&r, "Cpu", "Temperature", "Core (Tctl/Tdie)"));
+        let temp = s.readings().0.and_then(|r| sensors::cpu_temp(&r));
         s.store.sample_cpu(load, temp.map(|t| t as f32));
       }
       if tick % 20 == 19 {
@@ -1573,7 +2055,8 @@ pub fn run() {
     .setup(|app| {
       let dir = app.path().app_data_dir()?;
       let settings_path = dir.join("settings.json");
-      let settings: Settings = std::fs::read_to_string(&settings_path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+      let mut settings: Settings = std::fs::read_to_string(&settings_path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+      sanitize(&mut settings);
       let store = Store::open(dir);
       if let Ok(desktop) = app.path().desktop_dir() {
         if let Some(what) = store.import_old(&desktop.join("RAM Optimizer").join("data")) {
@@ -1626,11 +2109,23 @@ pub fn run() {
         update_done: AtomicU64::new(0),
         update_total: AtomicU64::new(0),
         update_busy: AtomicBool::new(false),
+        power_last: Mutex::new(None),
+        cool: Default::default(),
+        cool_stop: Arc::new(AtomicBool::new(true)),
+        hw_info: Mutex::new(None),
+        app_updates: Default::default(),
+        app_update_run: Default::default(),
+        uninstaller: Mutex::new(None),
+        prio_applied: Mutex::new(prio::Applied::new()),
         settings: Mutex::new(settings),
         settings_path,
       }));
       // Shimmy was closed (or the PC restarted) while it had boost off: put it back before anything else.
       app.state::<Shr>().restore_boost("Shimmy was closed while boost was off");
+      // Same for the power mode, unless it is still meant to follow the charger: then the first tick sets it anyway.
+      if !app.state::<Shr>().settings.lock().unwrap().power.follow {
+        app.state::<Shr>().restore_power("Shimmy was closed while it had changed the power mode");
+      }
       build_tray(app.handle())?;
       start_sampler(app.handle().clone());
       // The sign-in task starts Shimmy in the tray; any other start opens the window.
@@ -1647,7 +2142,7 @@ pub fn run() {
         std::thread::spawn(move || s.release());
       }
     })
-    .invoke_handler(tauri::generate_handler![get_state, get_history, get_gpu, get_storage, start_usage_scan, storage_folder, open_path, get_clean, start_clean_scan, start_clean, start_dism, start_finder, finder_delete, get_battery, set_charge_limit, set_fan_mode, set_heat_protection, get_settings, set_settings, set_app_mark, set_autostart, set_plugged_mode, start_cache_scan, start_cache_clean, folder_preview, folder_delete, empty_bin, set_hibernation, get_restore_points, open_apps_settings, get_log, get_startup, toggle_startup, close_procs, trim, quick_clean, get_update, check_update, start_update_download, install_update])
+    .invoke_handler(tauri::generate_handler![get_state, get_history, get_gpu, get_storage, start_usage_scan, storage_folder, open_path, get_clean, start_clean_scan, start_clean, start_dism, start_finder, finder_delete, get_battery, set_charge_limit, set_fan_mode, set_heat_protection, get_settings, set_settings, set_app_mark, set_autostart, set_plugged_mode, start_cache_scan, start_cache_clean, folder_preview, folder_delete, empty_bin, set_hibernation, get_restore_points, open_apps_settings, get_log, get_startup, toggle_startup, close_procs, trim, quick_clean, get_update, check_update, start_update_download, install_update, get_system_info, export_csv, start_cool_check, stop_cool_check, get_programs, check_app_updates, start_app_update, uninstall_app, set_priority])
     .build(tauri::generate_context!())
     .expect("error while running Shimmy Optimizer")
     .run(|_app, e| {
@@ -1656,4 +2151,32 @@ pub fn run() {
         api.prevent_exit();
       }
     });
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn settings_from_the_file_are_checked_like_the_page() {
+    let mut st: Settings = serde_json::from_value(json!({
+      "chargeLimit": 20,
+      "plugged": { "on": true, "holdPct": 5 },
+      "heat": { "saved": { "scheme": "/hibernate off", "ac": 2, "dc": 1, "since": 0 } },
+      "finder": { "extraRoots": [r"C:\Windows", r"C:\"] },
+      "weekly": { "day": 40, "cats": ["recycle", "nonsense"] },
+      "power": { "plugged": "turbo" },
+    }))
+    .unwrap();
+    sanitize(&mut st);
+    assert_eq!(st.charge_limit, None, "never written to the firmware out of range");
+    assert_eq!(st.plugged.hold_pct, hold::FLOOR);
+    assert!(st.heat.saved.is_none(), "not a plan GUID, so never passed to powercfg");
+    assert!(st.finder.extra_roots.is_empty(), "Windows and the whole of C: are not searched");
+    assert_eq!((st.weekly.day, st.weekly.cats.clone()), (6, vec!["recycle".to_string()]));
+    assert_eq!(st.power.plugged, "performance");
+    let mut off = Settings::default();
+    sanitize(&mut off);
+    assert_eq!(off.plugged.hold_pct, 0, "an unused hold level is left alone");
+  }
 }

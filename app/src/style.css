@@ -330,6 +330,29 @@ dialog[open] { animation: rise .25s var(--ease); }
 .set-note { margin: 0; color: var(--muted); }
 .dim { opacity: .45; }
 
+.head-acts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* ---------- System ---------- */
+#sysFacts { grid-template-columns: repeat(4, 1fr); margin-bottom: 40px; }
+#sysFacts b { font-size: 22px; }
+.sys-group { margin-bottom: 32px; }
+.sys-group h3 { font-size: 20px; font-weight: 600; margin: 0 0 12px; }
+.sys-group .row b { font-weight: 600; }
+.sys-group .row .muted { flex: none; }
+
+/* ---------- Programs and priority ---------- */
+#progList .frow .where { display: block; font-size: 14px; color: var(--muted); font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#progFilter { font: inherit; font-size: 15px; background: var(--s2); color: var(--ink); border: 0; padding: 7px 10px; width: 220px; }
+select.prio { font: inherit; font-size: 13px; background: var(--s2); color: var(--ink); border: 0; padding: 5px 6px; margin-right: 6px; }
+
+/* ---------- Cooling check ---------- */
+.cool-go { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 16px; }
+.cool-go select { font: inherit; background: var(--s3); color: var(--ink); border: 0; padding: 8px 10px; }
+.cool-result { margin-top: 16px; }
+.cool-result .facts { margin-top: 12px; grid-template-columns: repeat(4, 1fr); }
+.cool-result .facts b { font-size: 22px; }
+.cool-result p.good { color: var(--good); }
+
 /* ---------- Updates ---------- */
 #updFacts { grid-template-columns: repeat(3, 1fr); }
 .notes { max-width: 72ch; }
@@ -351,7 +374,7 @@ dialog[open] { animation: rise .25s var(--ease); }
   .cores { grid-template-columns: repeat(4, 1fr); }
   .gpu { grid-template-columns: 1fr 1fr; }
   .limits { grid-template-columns: 1fr; }
-  .facts.four { grid-template-columns: 1fr 1fr; }
+  .facts.four, #sysFacts, .cool-result .facts { grid-template-columns: 1fr 1fr; }
   .frow { grid-template-columns: 1fr 100px auto; }
   .frow .bar-col { display: none; }
   .frow.file { grid-template-columns: 32px 1fr 100px auto; }

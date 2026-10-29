@@ -1,6 +1,7 @@
 //! Safe clean: temp files, caches, crash dumps, Windows Update downloads, browser caches, the Recycle Bin, and the
 //! DISM component store. Everything is measured first; nothing runs until the user ticks it and presses Clean.
 //! These are caches that regrow, so they are deleted outright; the file finder (finder.rs) is what uses the Recycle Bin.
+//! The one exception is Recent items and jump lists, which go to the Recycle Bin: they are not space, they are history.
 use crate::jobs::Progress;
 use serde::Serialize;
 use std::collections::HashSet;
@@ -51,7 +52,7 @@ struct Def {
   default_on: bool,
 }
 
-const DEFS: [Def; 10] = [
+const DEFS: [Def; 11] = [
   Def { id: "user-temp", title: "Your temporary files", why: "Leftovers from installers and apps. Only files older than a day are removed, so nothing in use is touched.", default_on: true },
   Def { id: "win-temp", title: "Windows temporary files", why: "Windows' own temp folder. Same one-day rule.", default_on: true },
   Def { id: "thumbs", title: "Thumbnail cache", why: "Picture previews in File Explorer. Windows rebuilds them as you browse. Files Explorer has open are skipped.", default_on: true },
@@ -61,6 +62,7 @@ const DEFS: [Def; 10] = [
   Def { id: "brave", title: "Brave cache", why: "Cached web pages and images only. History, passwords and logins stay. Brave must be closed.", default_on: true },
   Def { id: "chrome", title: "Chrome cache", why: "Cached web pages and images only. History, passwords and logins stay. Chrome must be closed.", default_on: true },
   Def { id: "edge", title: "Edge cache", why: "Cached web pages and images only. History, passwords and logins stay. Edge must be closed, including its background process.", default_on: true },
+  Def { id: "recent", title: "Recent items and jump lists", why: "The lists of files you opened lately: Recent files in File Explorer, and the list each app shows when you right-click it on the taskbar (pins in those lists go too; Quick access pins stay). Moved to the Recycle Bin. Browser history, cookies and passwords are not touched.", default_on: false },
   Def { id: "recycle", title: "Recycle Bin", why: "Empties it for good. Off by default, because it is your undo for files you deleted.", default_on: false },
 ];
 
@@ -73,8 +75,28 @@ pub fn categories() -> Vec<(&'static str, &'static str)> {
   DEFS.iter().map(|d| (d.id, d.title)).collect()
 }
 
-fn env_path(var: &str) -> PathBuf {
-  PathBuf::from(std::env::var_os(var).unwrap_or_default())
+/// A standard folder, asked of Windows by the name of the environment variable that usually holds it. Never read from
+/// the environment itself: Shimmy deletes as administrator, and a user's own variable (TEMP=D:\, or one set by any
+/// program) could point a clean at a whole drive or at Windows. None when Windows cannot name it, and then the targets
+/// under it are skipped.
+pub fn known(var: &str) -> Option<PathBuf> {
+  use windows::Win32::System::Com::CoTaskMemFree;
+  use windows::Win32::UI::Shell::{
+    FOLDERID_LocalAppData, FOLDERID_Profile, FOLDERID_ProgramData, FOLDERID_ProgramFiles, FOLDERID_RoamingAppData, FOLDERID_Windows, SHGetKnownFolderPath, KF_FLAG_DEFAULT,
+  };
+  let id = match var {
+    "LOCALAPPDATA" => &FOLDERID_LocalAppData,
+    "APPDATA" => &FOLDERID_RoamingAppData,
+    "ProgramData" => &FOLDERID_ProgramData,
+    "SystemRoot" => &FOLDERID_Windows,
+    "USERPROFILE" => &FOLDERID_Profile,
+    "ProgramFiles" => &FOLDERID_ProgramFiles,
+    _ => return None,
+  };
+  let p = unsafe { SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None) }.ok()?;
+  let s = unsafe { p.to_string() };
+  unsafe { CoTaskMemFree(Some(p.0 as _)) };
+  s.ok().map(PathBuf::from).filter(|p| p.is_absolute() && p.parent().is_some())
 }
 
 /// Folder to clean, with a minimum file age and an optional file-name filter.
@@ -90,7 +112,7 @@ fn dir(p: PathBuf) -> Target {
 }
 
 fn browser(id: &str) -> Option<(&'static str, PathBuf)> {
-  let local = env_path("LOCALAPPDATA");
+  let local = known("LOCALAPPDATA")?;
   match id {
     "brave" => Some(("brave.exe", local.join(r"BraveSoftware\Brave-Browser\User Data"))),
     "chrome" => Some(("chrome.exe", local.join(r"Google\Chrome\User Data"))),
@@ -101,11 +123,12 @@ fn browser(id: &str) -> Option<(&'static str, PathBuf)> {
 
 fn targets(id: &str) -> Vec<Target> {
   let day = Duration::from_secs(24 * 3600);
-  let local = env_path("LOCALAPPDATA");
-  let windows = env_path("SystemRoot");
-  let program_data = env_path("ProgramData");
+  let (Some(local), Some(windows), Some(program_data), Some(roaming)) = (known("LOCALAPPDATA"), known("SystemRoot"), known("ProgramData"), known("APPDATA")) else {
+    return Vec::new();
+  };
   match id {
-    "user-temp" => vec![Target { min_age: day, ..dir(std::env::temp_dir()) }],
+    // The standard per-user temp folder, not %TEMP% (see `known`).
+    "user-temp" => vec![Target { min_age: day, ..dir(local.join("Temp")) }],
     "win-temp" => vec![Target { min_age: day, ..dir(windows.join("Temp")) }],
     "thumbs" => vec![Target {
       recursive: false,
@@ -126,6 +149,14 @@ fn targets(id: &str) -> Vec<Target> {
     ],
     "delivery" => vec![dir(windows.join(r"ServiceProfiles\NetworkService\AppData\Local\Microsoft\Windows\DeliveryOptimization\Cache"))],
     "wu" => vec![dir(windows.join(r"SoftwareDistribution\Download"))],
+    "recent" => {
+      let recent = roaming.join(r"Microsoft\Windows\Recent");
+      vec![
+        Target { recursive: false, only: Some(|n| n.to_ascii_lowercase().ends_with(".lnk")), ..dir(recent.clone()) },
+        Target { recursive: false, only: Some(is_jump_list), ..dir(recent.join("AutomaticDestinations")) },
+        Target { recursive: false, only: Some(|n| n.to_ascii_lowercase().ends_with(".customdestinations-ms")), ..dir(recent.join("CustomDestinations")) },
+      ]
+    }
     _ => match browser(id) {
       Some((_, data)) => {
         let mut out = vec![dir(data.join("ShaderCache")), dir(data.join("GrShaderCache"))];
@@ -142,6 +173,12 @@ fn targets(id: &str) -> Vec<Target> {
       None => vec![],
     },
   }
+}
+
+/// An app's jump list, but never File Explorer's own (f01b4d95cf55d32a), which holds the Quick access pins.
+fn is_jump_list(n: &str) -> bool {
+  let n = n.to_ascii_lowercase();
+  n.ends_with(".automaticdestinations-ms") && !n.starts_with("f01b4d95cf55d32a")
 }
 
 fn old_enough(md: &fs::Metadata, min_age: Duration) -> bool {
@@ -240,6 +277,20 @@ fn delete_files(list: &[(PathBuf, u64)]) -> (u64, u64, u64) {
   (freed, done, skipped)
 }
 
+/// Like `delete_files`, but to the Recycle Bin, one file at a time so a file in use only skips itself.
+fn recycle_files(list: &[(PathBuf, u64)]) -> (u64, u64, u64) {
+  let (mut freed, mut done, mut skipped) = (0, 0, 0);
+  for (path, bytes) in list {
+    if trash::delete(path).is_ok() {
+      freed += bytes;
+      done += 1;
+    } else {
+      skipped += 1;
+    }
+  }
+  (freed, done, skipped)
+}
+
 /// Removes now-empty folders below (never including) the target folder.
 fn prune_empty(d: &Path) {
   for entry in fs::read_dir(d).into_iter().flatten().flatten() {
@@ -252,6 +303,37 @@ fn prune_empty(d: &Path) {
 
 pub fn hidden(cmd: &str, args: &[&str]) -> std::io::Result<std::process::Output> {
   Command::new(cmd).args(args).stdin(Stdio::null()).creation_flags(CREATE_NO_WINDOW).output()
+}
+
+/// Like `hidden`, but the program is killed after `limit`, with a TimedOut error: for tools that can hang on the
+/// network or a prompt (winget), so a job never stays "running" for good.
+pub fn hidden_for(cmd: &str, args: &[&str], limit: Duration) -> std::io::Result<std::process::Output> {
+  let mut child = Command::new(cmd).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).creation_flags(CREATE_NO_WINDOW).spawn()?;
+  // Read both pipes on their own threads, so a chatty program cannot block on a full pipe while we wait.
+  let drain = |p: Option<Box<dyn Read + Send>>| {
+    std::thread::spawn(move || {
+      let mut buf = Vec::new();
+      if let Some(mut p) = p {
+        let _ = p.read_to_end(&mut buf);
+      }
+      buf
+    })
+  };
+  let out = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+  let err = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+  let started = std::time::Instant::now();
+  let status = loop {
+    if let Some(st) = child.try_wait()? {
+      break st;
+    }
+    if started.elapsed() >= limit {
+      let _ = child.kill();
+      let _ = child.wait();
+      return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, format!("{cmd} took longer than {} minutes and was stopped", limit.as_secs() / 60)));
+    }
+    std::thread::sleep(Duration::from_millis(200));
+  };
+  Ok(std::process::Output { status, stdout: out.join().unwrap_or_default(), stderr: err.join().unwrap_or_default() })
 }
 
 /// Closes a service or Service Control Manager handle when it goes out of scope.
@@ -324,7 +406,7 @@ pub fn run(ids: &[String], running: &HashSet<String>, progress: &Progress) -> Ve
         let ts = targets(d.id);
         let mut list = Vec::new();
         ts.iter().for_each(|t| files(t, &mut list));
-        let (freed, done, skipped) = delete_files(&list);
+        let (freed, done, skipped) = if d.id == "recent" { recycle_files(&list) } else { delete_files(&list) };
         for t in ts.iter().filter(|t| t.recursive && t.min_age.is_zero()) {
           prune_empty(&t.dir);
         }
@@ -414,8 +496,63 @@ pub fn dism_cleanup(progress: &Progress) -> Result<Dism, String> {
   Ok(d)
 }
 
+// ---------- Restore point ----------
+
+/// Asks System Restore for a restore point named `what`. Needs administrator rights and System Protection on for C:.
+/// Windows itself skips a new point when one was made in the last 24 hours, so the caller keeps to that too.
+pub fn restore_point(what: &str) -> Result<(), String> {
+  use windows::Win32::System::Restore::{SRSetRestorePointW, BEGIN_SYSTEM_CHANGE, END_SYSTEM_CHANGE, MODIFY_SETTINGS, RESTOREPOINTINFOW, STATEMGRSTATUS};
+  // The struct is packed, so the description is built apart and copied in whole.
+  let mut desc = [0u16; 256];
+  for (slot, ch) in desc.iter_mut().take(255).zip(format!("Shimmy: {what}").encode_utf16()) {
+    *slot = ch;
+  }
+  let mut info = RESTOREPOINTINFOW { dwEventType: BEGIN_SYSTEM_CHANGE, dwRestorePtType: MODIFY_SETTINGS, szDescription: desc, ..Default::default() };
+  let mut status = STATEMGRSTATUS::default();
+  if !unsafe { SRSetRestorePointW(&info, &mut status) }.as_bool() {
+    return Err(match status.nStatus.0 {
+      1058 => "System Protection is off for C:, so Windows cannot make restore points.".into(),
+      e => format!("Windows did not make a restore point (error {e})."),
+    });
+  }
+  // Close the change at once: the point is complete, and the work that follows is Shimmy's own.
+  info.dwEventType = END_SYSTEM_CHANGE;
+  info.llSequenceNumber = status.llSequenceNumber;
+  unsafe {
+    let _ = SRSetRestorePointW(&info, &mut status);
+  }
+  Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+  #[test]
+  fn standard_folders_come_from_windows() {
+    let local = super::known("LOCALAPPDATA").unwrap();
+    assert!(local.is_absolute() && local.ends_with(r"AppData\Local"));
+    assert!(super::known("SystemRoot").unwrap().join("explorer.exe").is_file());
+    assert!(super::known("TEMP").is_none(), "never read from the environment");
+    assert!(super::targets("user-temp")[0].dir.ends_with(r"AppData\Local\Temp"));
+  }
+
+  #[test]
+  fn slow_programs_are_stopped() {
+    let sys = super::known("SystemRoot").unwrap().join("System32");
+    let (ping, cmd) = (sys.join("PING.EXE"), sys.join("cmd.exe"));
+    let slow = super::hidden_for(&ping.to_string_lossy(), &["-n", "6", "127.0.0.1"], std::time::Duration::from_secs(1));
+    assert_eq!(slow.unwrap_err().kind(), std::io::ErrorKind::TimedOut);
+    let quick = super::hidden_for(&cmd.to_string_lossy(), &["/c", "echo", "hi"], std::time::Duration::from_secs(20)).unwrap();
+    assert!(quick.status.success() && String::from_utf8_lossy(&quick.stdout).contains("hi"));
+  }
+
+  #[test]
+  fn jump_lists_keep_quick_access() {
+    assert!(super::is_jump_list("5f7b5f1e01b83767.automaticDestinations-ms"));
+    assert!(!super::is_jump_list("f01b4d95cf55d32a.automaticDestinations-ms"), "File Explorer's Quick access pins");
+    assert!(!super::is_jump_list("desktop.ini"));
+    assert!(super::is_category("recent"));
+  }
+
   #[test]
   fn reads_dism_analysis() {
     let text = "Component Store (WinSxS) information:\r\n\r\nWindows Explorer Reported Size of Component Store : 8.12 GB\r\n\r\nActual Size of Component Store : 7.86 GB\r\n\r\n    Shared with Windows : 5.71 GB\r\n    Backups and Disabled Features : 2.03 GB\r\n    Cache and Temporary Data : 112.40 MB\r\n\r\nDate of Last Cleanup : 2026-09-02 10:14:51\r\n\r\nNumber of Reclaimable Packages : 3\r\nComponent Store Cleanup Recommended : Yes\r\n";

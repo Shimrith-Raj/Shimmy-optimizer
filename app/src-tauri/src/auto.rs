@@ -14,12 +14,19 @@ pub struct Alerts {
   pub disk_free_gb: u32,
   /// Battery charge, %, while on battery.
   pub battery_pct: u32,
+  /// Junk the Clean page would clean by default (its ticked categories), GB, checked hourly. 0 is off.
+  pub junk_gb: u32,
 }
 
 impl Default for Alerts {
   fn default() -> Self {
-    Alerts { enabled: true, ram_pct: 90, cpu_temp_c: 90, disk_free_gb: 10, battery_pct: 15 }
+    Alerts { enabled: true, ram_pct: 90, cpu_temp_c: 90, disk_free_gb: 10, battery_pct: 15, junk_gb: 5 }
   }
+}
+
+/// True when the junk alert is on and `bytes` of junk reach its threshold.
+pub fn junk_over(bytes: u64, junk_gb: u32) -> bool {
+  junk_gb > 0 && bytes >= junk_gb as u64 * 1_073_741_824
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
@@ -122,6 +129,7 @@ pub fn clamp(a: &mut Alerts, c: &mut AutoClean, w: &mut Weekly, f: &mut FinderPr
   a.cpu_temp_c = a.cpu_temp_c.clamp(60, 105);
   a.disk_free_gb = a.disk_free_gb.clamp(1, 200);
   a.battery_pct = a.battery_pct.clamp(5, 50);
+  a.junk_gb = a.junk_gb.min(200);
   c.at_pct = c.at_pct.clamp(50, 98);
   c.for_min = c.for_min.clamp(1, 60);
   if c.level != "clean" {
@@ -174,6 +182,8 @@ pub struct Watch {
   pub disk: Rule,
   pub battery: Rule,
   pub auto_clean: Rule,
+  /// Stepped hourly, from the junk scan's own thread.
+  pub junk: Rule,
 }
 
 /// Local time parts: day of week (0 = Sunday), hour, minute, second, millisecond.
@@ -267,6 +277,19 @@ mod tests {
     assert!(!update_notify_due(&u, "0.5.1", true), "once per version");
     assert!(update_notify_due(&u, "0.5.2", true));
     assert!(!update_notify_due(&u, "0.5.2", false), "never for a version that is not newer");
+  }
+
+  #[test]
+  fn junk_alert() {
+    let gb = 1_073_741_824;
+    assert!(!junk_over(10 * gb, 0), "0 is off");
+    assert!(!junk_over(5 * gb - 1, 5));
+    assert!(junk_over(5 * gb, 5));
+    // Hourly checks: once, then at most once a day while it stays above.
+    let (mut r, hour, day) = (Rule::default(), 3_600_000, 86_400_000);
+    assert!(r.step(true, hour, 0, day));
+    assert!(!r.step(true, 2 * hour, 0, day));
+    assert!(r.step(true, hour + day, 0, day));
   }
 
   #[test]

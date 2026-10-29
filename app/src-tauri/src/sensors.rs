@@ -47,6 +47,12 @@ pub fn value(rows: &[Reading], hw_type: &str, kind: &str, sensor: &str) -> Optio
   find(rows, hw_type, kind, sensor).and_then(|r| r.value)
 }
 
+/// The processor temperature: "Core (Tctl/Tdie)", or "Core (Tctl)" on chips that report only that. Every reader
+/// (Processor page, heat protection, alerts, the cooling check) goes through here so they always agree.
+pub fn cpu_temp(rows: &[Reading]) -> Option<f64> {
+  value(rows, "Cpu", "Temperature", "Core (Tctl/Tdie)").or_else(|| value(rows, "Cpu", "Temperature", "Core (Tctl)"))
+}
+
 /// How long a good temperature is reused when the sensor briefly returns nonsense.
 const HOLD_MS: u64 = 30_000;
 
@@ -156,5 +162,13 @@ mod tests {
     assert_eq!(read(&mut s, None, 20_000), Some(61.25));
     assert_eq!(read(&mut s, Some(0.0), 40_000), None, "after 30 s without a good value, show nothing");
     assert_eq!(read(&mut s, Some(250.0), 41_000), None, "impossible values are dropped too");
+  }
+
+  #[test]
+  fn cpu_temperature_falls_back_to_tctl() {
+    assert_eq!(cpu_temp(&temp(Some(61.0))), Some(61.0));
+    let tctl = vec![Reading { hw: "Ryzen".into(), hw_type: "Cpu".into(), sensor: "Core (Tctl)".into(), kind: "Temperature".into(), value: Some(58.0) }];
+    assert_eq!(cpu_temp(&tctl), Some(58.0), "chips that report only Tctl");
+    assert_eq!(cpu_temp(&[]), None);
   }
 }

@@ -48,6 +48,25 @@ pub fn iso(ms: u64) -> String {
   format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.{millis:03}Z", tod / 3600, tod % 3600 / 60, tod % 60)
 }
 
+/// One CSV line, every field quoted, as the log and the exports write them.
+pub fn csv_row(fields: &[&str]) -> String {
+  let q: Vec<String> = fields.iter().map(|s| format!("\"{}\"", s.replace('"', "\"\""))).collect();
+  format!("{}\n", q.join(","))
+}
+
+/// A cell for a CSV the user opens in Excel. One that starts like a formula (=, +, -, @, a tab or a carriage return)
+/// gets a leading apostrophe, which Excel shows as plain text: file names and app names come from the disk and the
+/// registry, and quoting alone does not stop Excel from running `=HYPERLINK(...)`.
+pub fn export_cell(s: &str) -> String {
+  if s.starts_with(['=', '+', '-', '@', '\t', '\r']) { format!("'{s}") } else { s.to_string() }
+}
+
+/// One line of an export: `csv_row`, with every cell made safe for Excel.
+pub fn export_row(fields: &[&str]) -> String {
+  let safe: Vec<String> = fields.iter().map(|f| export_cell(f)).collect();
+  csv_row(&safe.iter().map(String::as_str).collect::<Vec<_>>())
+}
+
 static CSV_FIELD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#""((?:[^"]|"")*)""#).unwrap());
 
 impl Store {
@@ -97,7 +116,7 @@ impl Store {
     let _ = fs::write(self.dir.join("cpu-history.json"), cpu);
   }
 
-  fn log_file(&self) -> PathBuf {
+  pub fn log_file(&self) -> PathBuf {
     self.dir.join("actions-log.csv")
   }
 
@@ -105,8 +124,7 @@ impl Store {
     let _guard = self.log_lock.lock().unwrap();
     let path = self.log_file();
     let fresh = !path.exists();
-    let q = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
-    let line = format!("{},{},{},{}\n", q(&iso(now_ms())), q(action), q(target), q(detail));
+    let line = csv_row(&[&iso(now_ms()), action, target, detail]);
     if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(path) {
       let _ = f.write_all(format!("{}{line}", if fresh { "time,action,target,detail\n" } else { "" }).as_bytes());
     }
@@ -120,6 +138,18 @@ impl Store {
       let get = |i: usize| f.get(i).cloned().unwrap_or_default();
       LogRow { time: get(0), action: get(1), target: get(2), detail: get(3) }
     }).collect()
+  }
+
+  /// The whole log for an export, every cell made safe for Excel (`export_row`). None when nothing has been logged.
+  pub fn export_log(&self) -> Option<String> {
+    let text = fs::read_to_string(self.log_file()).ok()?;
+    let mut lines = text.lines();
+    let mut out = format!("{}\n", lines.next()?);
+    for r in lines {
+      let f: Vec<String> = CSV_FIELD.captures_iter(r).map(|c| c[1].replace("\"\"", "\"")).collect();
+      out += &export_row(&f.iter().map(String::as_str).collect::<Vec<_>>());
+    }
+    Some(out)
   }
 
   /// One-time import from RAM Optimizer v0.2. Only runs when Shimmy has no log yet; the old folder is left untouched.
@@ -153,5 +183,15 @@ mod tests {
   fn iso_matches_javascript() {
     assert_eq!(super::iso(1_793_116_881_123), "2026-10-27T16:01:21.123Z");
     assert_eq!(super::iso(0), "1970-01-01T00:00:00.000Z");
+  }
+
+  #[test]
+  fn csv_quotes_every_field() {
+    assert_eq!(super::csv_row(&["a", "say \"hi\"", "x,y"]), "\"a\",\"say \"\"hi\"\"\",\"x,y\"\n");
+  }
+
+  #[test]
+  fn exports_never_hold_formulas() {
+    assert_eq!(super::export_row(&["=HYPERLINK(\"x\")", "@sum", "+1", "-2", "\tx", "plain", "a=b"]), "\"'=HYPERLINK(\"\"x\"\")\",\"'@sum\",\"'+1\",\"'-2\",\"'\tx\",\"plain\",\"a=b\"\n");
   }
 }

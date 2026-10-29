@@ -13,6 +13,8 @@ const COMMANDS = {
   '/api/gpu': 'get_gpu', '/api/storage': 'get_storage', '/api/usage/scan': 'start_usage_scan', '/api/folder': 'storage_folder',
   '/api/open': 'open_path', '/api/clean': 'get_clean', '/api/clean/scan': 'start_clean_scan', '/api/clean/run': 'start_clean',
   '/api/battery': 'get_battery', '/api/settings': 'get_settings', '/api/settings/save': 'set_settings', '/api/autostart': 'set_autostart', '/api/plugged': 'set_plugged_mode', '/api/caches/scan': 'start_cache_scan', '/api/caches/run': 'start_cache_clean', '/api/folder/preview': 'folder_preview', '/api/folder/delete': 'folder_delete', '/api/bin/empty': 'empty_bin', '/api/hibernation': 'set_hibernation', '/api/restore': 'get_restore_points', '/api/apps-settings': 'open_apps_settings', '/api/charge-limit': 'set_charge_limit', '/api/fan': 'set_fan_mode', '/api/heat': 'set_heat_protection', '/api/dism': 'start_dism', '/api/finder': 'start_finder', '/api/finder/delete': 'finder_delete', '/api/startup/toggle': 'toggle_startup', '/api/update': 'get_update', '/api/update/check': 'check_update', '/api/update/download': 'start_update_download', '/api/update/install': 'install_update', '/api/close': 'close_procs', '/api/app-mark': 'set_app_mark', '/api/trim': 'trim', '/api/quickclean': 'quick_clean',
+  '/api/programs': 'get_programs', '/api/programs/check': 'check_app_updates', '/api/programs/update': 'start_app_update', '/api/programs/uninstall': 'uninstall_app', '/api/priority': 'set_priority',
+  '/api/system': 'get_system_info', '/api/export': 'export_csv', '/api/cool/start': 'start_cool_check', '/api/cool/stop': 'stop_cool_check',
 };
 async function api(path, body) {
   try {
@@ -287,6 +289,7 @@ function renderCpu() {
   $('#cpuUnit').textContent = c.tempC != null ? '°C' : '%';
   $('#cpuStatus').textContent = c.status.text + (S.state.heat?.boostOff ? ' Boost is off to cool it down.' : '');
   renderFan();
+  renderCool();
   const [fan, ...otherFans] = c.fans;
   const facts = [
     [`${Math.round(c.loadPct)}%`, 'Load'],
@@ -343,6 +346,46 @@ function renderFan() {
       : `On. If the processor stays at ${heat.hotC} °C or more for 30 seconds, Shimmy turns boost off until it cools to ${heat.coolC} °C. Usually several degrees cooler for a small loss of speed.`;
   $('#fanCtl').innerHTML = `<div class="hold${heat.boostOff ? ' on' : ''}"><div><b>Heat protection</b><p>${esc(text)}</p></div>${sw('data-heat', heat.enabled, 'Heat protection')}</div>${modes}
     <p class="care-note">Fn+F and MyASUS change the same setting; Shimmy shows whichever mode is active. The fans themselves follow the firmware's curve for the mode, which cannot be changed on this laptop.</p>`;
+}
+
+// The cooling check (cool.rs): the page only starts and stops it; the sampler's state carries its progress and verdict.
+S.coolSecs = 90;
+function renderCool() {
+  const j = S.state.cool, v = j.result;
+  let html;
+  if (j.running) {
+    html = `<div class="hold on"><div><b>Running</b><p>${esc(j.progress)}. Every core is at full load, so the fans are loud. It stops by itself at 95 °C or at the time limit.</p></div><button class="btn danger" data-cool-stop>Stop</button></div>`;
+  } else {
+    html = `<p class="care-note">Puts every core at full load for a minute or two and watches the temperature, clocks and fans, to show whether the cooling keeps up. It stops at 95 °C, at the time limit, or when you press Stop. Plug the charger in for a fair result, and close heavy apps first.</p>
+      <div class="cool-go"><select id="coolSecs" aria-label="How long">${[[60, '1 minute'], [90, '90 seconds'], [120, '2 minutes']].map(([n, l]) => `<option value="${n}" ${S.coolSecs === n ? 'selected' : ''}>${l}</option>`).join('')}</select><button class="btn" data-cool-start>Start the check</button></div>`;
+    if (j.error) html += `<p class="blocked">${esc(j.error)}</p>`;
+  }
+  if (v && !j.running) {
+    const fact = (val, label) => `<div><b>${esc(val)}</b><span>${esc(label)}</span></div>`;
+    const deg = (t) => (t != null ? Math.round(t) : '–');
+    html += `<div class="cool-result"><p class="${v.level === 'good' ? 'good' : ''}"><b>${esc(v.text)}</b></p><div class="facts">
+      ${fact(`${deg(v.startC)} → ${deg(v.peakC)} °C`, 'Start and peak temperature')}
+      ${fact(v.clockMhz ? `${ghz(v.clockMhz)} GHz` : '–', v.baseMhz ? `Clock in the second half, rated ${ghz(v.baseMhz)} GHz` : 'Clock in the second half')}
+      ${fact(v.peakW != null ? `${Math.round(v.peakW)} W` : '–', 'Peak processor power')}
+      ${fact(v.peakFan ? `${v.peakFan.toLocaleString()} rpm` : '–', 'Fastest fan')}
+      </div><p class="muted">Ran for ${v.seconds} s, ${ago(j.at)}. It is in the Log too.</p></div>`;
+  }
+  // Rebuilt only when it changes, so the duration picker is not reset under the mouse every 5 s.
+  if (html !== S.coolHtml) $('#coolCtl').innerHTML = S.coolHtml = html;
+}
+
+function confirmCool() {
+  const secs = S.coolSecs;
+  $('#modalBody').innerHTML = `<h3>Start the cooling check?</h3>
+    <div class="muted">Every core runs at full load for ${secs} seconds. The fans get loud and the processor gets hot: that is the test. Shimmy stops it at 95 °C, at the time limit, or when you press Stop. The PC stays usable, only slower.</div>
+    <div class="modal-actions"><button class="btn ghost" id="mCancel">Cancel</button><button class="btn" id="mOk">Start</button></div>`;
+  $('#modal').showModal();
+  $('#mCancel').onclick = () => $('#modal').close();
+  $('#mOk').onclick = async () => {
+    $('#modal').close();
+    try { await api('/api/cool/start', { seconds: secs }); } catch (e) { toast(e.message, true); }
+    refresh();
+  };
 }
 
 async function loadGpu() {
@@ -492,6 +535,7 @@ async function loadFolder(path) {
     return;
   }
   S.folderLoaded = true;
+  S.folderPath = f.path;
   const profile = S.storage.profile;
   const rel = f.path.length > profile.length ? f.path.slice(profile.length + 1).split('\\') : [];
   const crumbs = [{ name: 'Your folder', path: profile }];
@@ -505,6 +549,14 @@ async function loadFolder(path) {
 
 
 // ---------- Storage: deleting, old caches, system files ----------
+
+// Said before a delete the Recycle Bin cannot undo. A restore point is not a backup of the deleted files, and Windows
+// makes at most one a day (none with System Restore off), so the page never promises one.
+const RP_NOTE = 'Shimmy also asks Windows for a restore point, which Windows makes at most once a day; it brings back Windows settings and programs, not deleted files.';
+
+// What happened to the restore point Shimmy asks for before a delete the Recycle Bin cannot undo.
+const restoreNote = (r) => !r.restorePoint ? ''
+  : ' ' + r.restorePoint + (r.restorePoint.startsWith('Windows made') ? ' Files on C: can often be got back from it: right-click the folder they were in, then Restore previous versions.' : '');
 
 async function previewDelete(path) {
   const name = path.split('\\').pop();
@@ -523,7 +575,7 @@ async function previewDelete(path) {
   const binNote = 'Goes to the Recycle Bin: you can restore it, and the space is freed once the bin is emptied.';
   $('#modalBody').innerHTML = `<h3>Delete ${esc(name)}?</h3><div class="muted">${esc(path)}</div>
     <div class="plist"><div><span>Size</span><span>${fmtB(c.bytes)}</span></div><div><span>Files</span><span>${c.files.toLocaleString()}</span></div><div><span>Folders inside</span><span>${c.folders.toLocaleString()}</span></div></div>
-    ${fits ? '' : `<div class="warn-box">This is bigger than your Recycle Bin (${fmtB(r.binCapacity)}), so Windows can only delete it for good.</div>`}
+    ${fits ? '' : `<div class="warn-box">This is bigger than your Recycle Bin (${fmtB(r.binCapacity)}), so Windows can only delete it for good. ${RP_NOTE}</div>`}
     <label class="perm"><input type="checkbox" class="tick" id="mPerm" ${fits ? '' : 'checked disabled'}>Delete for good and free ${fmtB(c.bytes)} now (no undo)</label>
     <div class="muted" id="mNote">${fits ? binNote : 'It cannot be restored afterwards.'}</div>
     <div class="modal-actions"><button class="btn ghost" id="mCancel">Cancel</button><button class="btn danger" id="mOk">${fits ? 'Move to Recycle Bin' : 'Delete for good'}</button></div>`;
@@ -531,7 +583,7 @@ async function previewDelete(path) {
   $('#mPerm').onchange = () => {
     const perm = $('#mPerm').checked;
     $('#mOk').textContent = perm ? 'Delete for good' : 'Move to Recycle Bin';
-    $('#mNote').textContent = perm ? 'Deleted straight away. It cannot be restored.' : binNote;
+    $('#mNote').textContent = perm ? `Deleted straight away. It cannot be restored from the Recycle Bin. ${RP_NOTE}` : binNote;
   };
   $('#mOk').onclick = async () => {
     $('#mOk').disabled = true; $('#mOk').textContent = 'Working';
@@ -539,7 +591,7 @@ async function previewDelete(path) {
       const d = await api('/api/folder/delete', { path, permanent: $('#mPerm').checked, allowBig: !fits });
       $('#modal').close();
       if (d.needsConfirm) return toast('The folder grew past the Recycle Bin’s size. Check it again.', true);
-      toast(d.permanent ? `Deleted ${name} for good. ${fmtB(d.bytes)} freed.` : `Moved ${name} to the Recycle Bin (${fmtB(d.bytes)}). Empty the bin to free the space.`);
+      toast(d.permanent ? `Deleted ${name} for good. ${fmtB(d.bytes)} freed.${restoreNote(d)}` : `Moved ${name} to the Recycle Bin (${fmtB(d.bytes)}). Empty the bin to free the space.`);
       loadFolder(path.split('\\').slice(0, -1).join('\\'));
       loadStorage();
     } catch (e) { $('#modal').close(); toast(e.message, true); }
@@ -716,6 +768,8 @@ function fileRow(i) {
 function renderFinder(j) {
   $('#finderBtn').disabled = j.running;
   $('#finderBtn').textContent = j.running ? 'Looking' : j.result ? 'Look again' : 'Look for them';
+  // Export is offered only for results the page is showing, never for an older scan behind a new one.
+  $('#finderExport').hidden = j.running || !!j.error || !j.result;
   if (j.running) { $('#finder').innerHTML = `<div class="empty">${esc(j.progress)}…</div>`; return; }
   if (j.error) { $('#finder').innerHTML = `<div class="empty">${esc(j.error)}</div>`; return; }
   const f = j.result;
@@ -756,7 +810,7 @@ async function doDelete(paths, allowPermanent) {
       const big = r.needsConfirm;
       const fits = paths.filter((p) => !big.some((b) => b.path === p));
       $('#modalBody').innerHTML = `<h3>${big.length} file${big.length === 1 ? ' is' : 's are'} too big for the Recycle Bin</h3>
-        <div class="warn-box">Windows would delete ${big.length === 1 ? 'it' : 'them'} <b>permanently</b>, with no way to restore.</div>
+        <div class="warn-box">Windows would delete ${big.length === 1 ? 'it' : 'them'} <b>permanently</b>, with no way to restore from the Recycle Bin. ${RP_NOTE}</div>
         <div class="plist">${big.map((b) => `<div><span>${esc(b.path.split('\\').pop())}</span><span>${fmtB(b.bytes)}</span></div>`).join('')}</div>
         <div class="modal-actions"><button class="btn ghost" id="mSkip">${fits.length ? 'Skip these, recycle the rest' : 'Cancel'}</button><button class="btn danger" id="mOk">Delete permanently</button></div>`;
       $('#mSkip').onclick = () => (fits.length ? doDelete(fits, false) : $('#modal').close());
@@ -766,7 +820,7 @@ async function doDelete(paths, allowPermanent) {
     $('#modal').close();
     paths.forEach((p) => S.finderSel.delete(p));
     const freed = r.recycledBytes + r.permanentBytes;
-    toast(`${r.recycled ? `Moved ${r.recycled} to the Recycle Bin. ` : ''}${r.permanent ? `Deleted ${r.permanent} permanently. ` : ''}${fmtB(freed)} freed.${r.refused.length ? ` Refused ${r.refused.length}: ${r.refused.map((x) => x.reason).join(', ')}.` : ''}${r.failed.length ? ` ${r.failed.length} could not be removed.` : ''}`);
+    toast(`${r.recycled ? `Moved ${r.recycled} to the Recycle Bin. ` : ''}${r.permanent ? `Deleted ${r.permanent} permanently. ` : ''}${fmtB(freed)} freed.${r.refused.length ? ` Refused ${r.refused.length}: ${r.refused.map((x) => x.reason).join(', ')}.` : ''}${r.failed.length ? ` ${r.failed.length} could not be removed.` : ''}${restoreNote(r)}`);
     S.finderAt = 0;
     loadClean();
   } catch (e) {
@@ -1014,7 +1068,27 @@ async function setMark(exes, mark) {
   if (S.tab === 'settings' && S.cfg) renderSettings();
 }
 
+// Background priority (prio.rs), per app on the Apps page.
+const PRIO = [['normal', 'Normal priority'], ['below', 'Below normal'], ['low', 'Low'], ['eco', 'Efficiency mode']];
+function prioControl(g) {
+  const pr = S.state.priorities || {};
+  const set = new Set(groupExes(g).map((e) => pr[e] || 'normal'));
+  const cur = set.size === 1 ? [...set][0] : '';
+  return `<select class="prio" data-prio-app="${esc(g.app)}" aria-label="Priority of ${esc(g.app)}" title="Lower lets the app you are using get the processor first">${cur ? '' : '<option value="" selected>Mixed</option>'}${PRIO.map(([v, l]) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+}
+
+async function setPriority(exes, level) {
+  try {
+    const r = await api('/api/priority', { exes, level });
+    S.state.priorities = r.priorities;
+    toast(level === 'normal' ? 'Back to normal priority.' : `Set to ${PRIO.find((p) => p[0] === level)[1]}. New processes of it get the same within 30 seconds.`);
+  } catch (e) { toast(e.message, true); }
+  renderApps();
+}
+
 function renderApps() {
+  // An open priority menu would be closed by the 5-second refresh.
+  if (document.activeElement?.classList.contains('prio')) return;
   const q = S.filter.toLowerCase();
   const groups = S.state.groups.filter((g) => !q || g.app.toLowerCase().includes(q) || g.procs.some((p) => p.name.toLowerCase().includes(q) || p.title.toLowerCase().includes(q)));
   const max = Math.max(1, ...groups.map((g) => g.mb));
@@ -1025,6 +1099,7 @@ function renderApps() {
     const lock = g.builtin ? `<span class="lock" title="This is never offered for closing">${esc(lockText(g))}</span>` : g.protected ? '' : g.reason ? '<span class="lock" title="Protected processes in this group are skipped">Partly protected</span>' : '';
     const mark = g.builtin ? '' : markControl(g);
     rows.push(`<tr class="group ${open ? 'open' : ''}" data-app="${esc(g.app)}"><td><span class="caret">▸</span></td><td><b>${esc(g.app)}</b>${lock}</td><td class="num">${g.count}</td><td class="num">${fmt(g.mb)}</td><td class="bar-col"><div class="meter"><i style="width:${(g.mb / max) * 100}%"></i></div></td><td class="num"><span class="mark-cell">${mark}${ids.length ? `<button class="btn small ghost" data-close-app="${esc(g.app)}">Close</button>` : ''}</span></td></tr>`);
+    if (open && !g.builtin) rows.push(`<tr class="child"><td></td><td>Background priority <span class="muted">for every process of ${esc(g.app)}, now and as new ones start</span></td><td></td><td></td><td class="bar-col"></td><td class="num">${prioControl(g)}</td></tr>`);
     if (open) for (const p of g.procs) {
       rows.push(`<tr class="child"><td></td><td>${esc(p.name)} <span class="muted">pid ${p.pid}</span>${p.title ? `, ${esc(p.title)}` : ''}${p.cmd ? `<div class="cmd">${esc(p.cmd)}</div>` : ''}</td><td></td><td class="num">${p.mb} MB</td><td class="bar-col"></td><td class="num">${p.protected ? `<span class="lock">${esc(lockText(p))}</span>` : `<button class="btn small ghost" data-close-pid="${p.pid}" data-app="${esc(g.app)}">Close</button>`}</td></tr>`);
     }
@@ -1206,6 +1281,9 @@ const hourLabel = (h) => new Date(2026, 0, 4, h).toLocaleTimeString([], { hour: 
 const sw = (attr, on, label, disabled) => `<label class="switch"><input type="checkbox" ${attr} ${on ? 'checked' : ''} ${disabled ? 'disabled' : ''} aria-label="${esc(label)}"><span></span></label>`;
 const num = (path, v, unit, min, max) => `<span class="inp"><input type="number" data-set="${path}" value="${v}" min="${min}" max="${max}"><i>${unit}</i></span>`;
 
+const POWER_MODES = [['efficiency', 'Best power efficiency'], ['balanced', 'Balanced'], ['performance', 'Best performance']];
+const powerSelect = (side) => `<select data-pset="${side}">${POWER_MODES.map(([id, name]) => `<option value="${id}" ${S.cfg.settings.power[side] === id ? 'selected' : ''}>${name}</option>`).join('')}</select>`;
+
 async function loadSettings() {
   try { S.cfg = await api('/api/settings'); } catch (e) { return toast(e.message, true); }
   renderSettings();
@@ -1232,6 +1310,7 @@ function renderSettings() {
         ${field('Processor temperature, for 30 seconds', num('alerts.cpuTempC', a.cpuTempC, '°C', 60, 105))}
         ${field('Free space on C: below', num('alerts.diskFreeGb', a.diskFreeGb, 'GB', 1, 200))}
         ${field('Battery, when unplugged, at or below', num('alerts.batteryPct', a.batteryPct, '%', 5, 50))}
+        ${field('Junk to clean passes, checked hourly, at most once a day (0 is off)', num('alerts.junkGb', a.junkGb, 'GB', 0, 200))}
       </div>`),
     block('Automatic memory clean', 'When memory stays full, Shimmy cleans it for you and tells you what it did. At most once every 15 minutes.', sw('data-set="autoClean.enabled"', c.enabled, 'Automatic memory clean'),
       `<div class="set-grid ${c.enabled ? '' : 'dim'}">
@@ -1252,6 +1331,8 @@ function renderSettings() {
     block('Marked apps', 'Safe apps are closed by Clean now and by the automatic clean, even when they have no window. Protected apps are never closed or trimmed, not even by hand. Every other app is only trimmed. Mark apps on the Apps page.', '',
       `<div class="rows">${marked.map(([exe, m]) => `<div class="row"><span>${esc(exe)} <span class="muted">${esc(MARK_WORDS[m] || m)}</span></span><button class="btn small ghost" data-rm-mark="${esc(exe)}">Remove</button></div>`).join('') || '<div class="row"><span class="muted">No apps marked yet.</span></div>'}</div>`),
     block('Heat protection', `When the processor stays at 90 °C or more for 30 seconds, Shimmy turns CPU boost off until it cools to 75 °C for 2 minutes. Quiet: it shows on the Processor page and in the Log.`, sw('data-set="heat.enabled"', st.heat.enabled, 'Heat protection')),
+    block('Power mode follows the charger', `Switches Windows' power mode when you plug the charger in or pull it out. Only then, so a mode you pick yourself in Windows stays until the next change. When you turn this off or exit Shimmy, it puts back the mode it found. While heat protection has boost off, the switch waits. Now: ${esc(S.cfg.powerMode || 'unknown')}.`, sw('data-set="power.follow"', st.power.follow, 'Power mode follows the charger'),
+      `<div class="set-grid ${st.power.follow ? '' : 'dim'}">${field('On the charger', powerSelect('plugged'))}${field('On battery', powerSelect('battery'))}</div>`),
     block('Start with Windows', 'Starts Shimmy in the tray when you sign in, with administrator rights and no prompt, through a Task Scheduler task. Works on battery too.', sw('data-autostart', startWithWindows, 'Start with Windows')),
     block('Check for updates daily', "Once a day Shimmy contacts GitHub to see whether a newer version is out, and tells you once per new version. GitHub sees your IP address and Shimmy's version; nothing else about your PC is sent. You can also turn this off on the Updates page, and still check by hand there.", sw('data-set="updates.autoCheck"', st.updates.autoCheck, 'Check for updates daily')),
     block('About', 'Shimmy Optimizer, founded and built by Shimrith Raj. Open source under the MIT licence. The terms of use and the licences of the parts it includes are in the legal folder where Shimmy is installed.'),
@@ -1296,6 +1377,10 @@ $('#settings').addEventListener('change', async (e) => {
   if (t.dataset.set) {
     setPath(t.dataset.set, t.type === 'checkbox' ? t.checked : Number(t.value));
     return saveSettings(t.type === 'checkbox');
+  }
+  if (t.dataset.pset) {
+    st.power[t.dataset.pset] = t.value;
+    return saveSettings();
   }
   if (t.dataset.wcat) {
     st.weekly.cats = st.weekly.cats.filter((c) => c !== t.dataset.wcat);
@@ -1501,6 +1586,171 @@ async function loadStartup() {
   } catch (e) { toast(e.message, true); }
 }
 
+// ---------- Programs ----------
+
+let progTimer = null;
+// Polls for winget and uninstaller progress; `full` also re-reads the installed apps, which is a registry walk, so
+// only when that list can have changed.
+const progSoon = (ms = 1500, full = false) => { clearTimeout(progTimer); progTimer = setTimeout(() => S.tab === 'programs' && loadPrograms(full), ms); };
+
+async function loadPrograms(full = true) {
+  let r;
+  try { r = await api('/api/programs', { installed: full || !S.prog }); } catch (e) { return toast(e.message, true); }
+  if (!r.installed) r.installed = S.prog.installed;
+  // An uninstaller Shimmy started has just closed: the list is out of date.
+  const closed = S.prog?.uninstalling && !r.uninstalling;
+  S.prog = r;
+  if (closed) return loadPrograms(true);
+  const u = r.updates, run = r.updateRun;
+  if (!u.at && !u.running && !u.error && !S.progAsked) {
+    S.progAsked = true;
+    try { await api('/api/programs/check'); } catch (e) { toast(e.message, true); }
+    return progSoon(300);
+  }
+  if (S.progWaiting && !run.running && run.result) {
+    S.progWaiting = false;
+    const x = run.result;
+    toast(x.ok ? `${x.name} is up to date now.` : `${x.name} was not updated: ${x.message}`, !x.ok);
+  }
+  renderPrograms();
+  if (u.running || run.running) progSoon();
+  else if (r.uninstalling) progSoon(3000);
+}
+
+function renderPrograms() {
+  const { updates: u, updateRun: run, installed } = S.prog;
+  const list = u.result || [];
+  const missing = u.at && !u.result;
+  $('#progCheck').disabled = u.running || run.running;
+  $('#progCheck').textContent = u.running ? 'Checking' : 'Check for updates';
+  $('#progUpdNote').textContent = run.running ? `${run.progress}…` : u.running ? `${u.progress}…` : u.error || (u.at && !missing ? `${list.length} found ${ago(u.at)}` : '');
+  $('#progUpdates').innerHTML = missing
+    ? '<div class="empty">winget, Windows’ app installer, is not on this PC, so Shimmy cannot list updates. It comes with App Installer from the Microsoft Store.</div>'
+    : list.map((a) => `<div class="frow sys"><b>${esc(a.name)}<span class="where">${esc(a.version)} → ${esc(a.available)} · ${esc(a.id)}</span></b><span></span><span></span><button class="btn small ghost" data-app-update="${esc(a.id)}" ${run.running ? 'disabled' : ''}>Update</button></div>`).join('')
+      || `<div class="empty">${u.at ? 'Every app winget knows is up to date.' : u.running ? 'Checking…' : u.error ? 'The check did not finish. Press Check for updates to try again.' : 'Not checked yet.'}</div>`;
+  // The installed list is rebuilt only when it or the filter changed, so polling does not reset hover or focus.
+  const q = (S.progFilter || '').toLowerCase();
+  if (S.progDrawn?.list === installed && S.progDrawn.q === q) return;
+  S.progDrawn = { list: installed, q };
+  const apps = installed.filter((a) => !q || a.name.toLowerCase().includes(q) || a.publisher.toLowerCase().includes(q));
+  const max = Math.max(1, ...apps.map((a) => a.bytes || 0));
+  $('#progList').innerHTML = apps.map((a) => {
+    const sub = [a.publisher, a.version, a.installed ? `installed ${a.installed}` : '', a.forAllUsers ? '' : 'just for you'].filter(Boolean).join(' · ');
+    return `<div class="frow"><b>${esc(a.name)}<span class="where">${esc(sub)}</span></b><span class="num">${a.bytes ? fmtB(a.bytes) : '–'}</span><span class="bar-col"><span class="meter"><i style="width:${((a.bytes || 0) / max) * 100}%"></i></span></span><span class="row-acts"><button class="btn small ghost" data-uninstall="${esc(a.key)}" data-name="${esc(a.name)}">Uninstall</button></span></div>`;
+  }).join('') || '<div class="empty">No apps match.</div>';
+}
+
+function confirmAppUpdate(id) {
+  const a = (S.prog.updates.result || []).find((x) => x.id === id);
+  if (!a) return;
+  $('#modalBody').innerHTML = `<h3>Update ${esc(a.name)}?</h3>
+    <div class="muted">From ${esc(a.version)} to ${esc(a.available)}. winget downloads it from the publisher and runs its installer, which may show its own window. Close ${esc(a.name)} first if it is open.</div>
+    <div class="modal-actions"><button class="btn ghost" id="mCancel">Cancel</button><button class="btn" id="mOk">Update</button></div>`;
+  $('#modal').showModal();
+  $('#mCancel').onclick = () => $('#modal').close();
+  $('#mOk').onclick = async () => {
+    $('#modal').close();
+    try { await api('/api/programs/update', { id }); S.progWaiting = true; } catch (e) { toast(e.message, true); }
+    loadPrograms(false);
+  };
+}
+
+function confirmUninstall(key, name) {
+  // Per-user apps are listed in a part of the registry any program can write, so Shimmy (running as administrator)
+  // does not start their uninstaller; Windows' Installed apps page does it with your own rights.
+  const mine = key.startsWith('HKCU\\');
+  $('#modalBody').innerHTML = `<h3>Uninstall ${esc(name)}?</h3>
+    <div class="muted">${mine
+      ? `${esc(name)} was installed just for you, so Shimmy does not start its uninstaller as administrator. It opens Windows’ Installed apps page, where you can remove it.`
+      : `Shimmy starts ${esc(name)}’s own uninstaller. It may ask you questions in its own window, and nothing is removed until you go through it there.`}</div>
+    <div class="modal-actions"><button class="btn ghost" id="mCancel">Cancel</button><button class="btn danger" id="mOk">${mine ? 'Open Installed apps' : 'Start its uninstaller'}</button></div>`;
+  $('#modal').showModal();
+  $('#mCancel').onclick = () => $('#modal').close();
+  $('#mOk').onclick = async () => {
+    $('#modal').close();
+    try {
+      const r = await api('/api/programs/uninstall', { key });
+      toast(r.settings ? `Opened Installed apps. Find ${r.name} there.` : `Started ${r.name}’s uninstaller. The list updates when it has finished.`);
+      // Shimmy's own uninstaller is watched until it closes (even one that closes before the first poll);
+      // Installed apps is not, so look again in 20 s.
+      if (!r.settings) S.prog.uninstalling = true;
+      progSoon(r.settings ? 20000 : 3000, !!r.settings);
+    } catch (e) { toast(e.message, true); }
+  };
+}
+
+// ---------- System ----------
+
+const RAM_TYPES = { 20: 'DDR', 21: 'DDR2', 24: 'DDR3', 26: 'DDR4', 27: 'LPDDR', 28: 'LPDDR2', 29: 'LPDDR3', 30: 'LPDDR4', 34: 'DDR5', 35: 'LPDDR5' };
+const tidy = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
+
+async function loadSystem() {
+  if (!S.hw) {
+    $('#sysInfo').innerHTML = '<div class="empty">Asking Windows what is inside. This takes a few seconds…</div>';
+    // One question at a time: switching tabs quickly would otherwise start a second PowerShell inventory.
+    S.hwAsk ??= api('/api/system').finally(() => { S.hwAsk = null; });
+    try { S.hw = await S.hwAsk; } catch (e) { $('#sysInfo').innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  }
+  renderSystem();
+}
+
+// [title, [[label, value], ...]] for the page and the Copy text alike.
+function sysGroups(h) {
+  const cpu = h.cpu || [], ram = h.ram || [], gpu = h.gpu || [], disks = h.disks || [];
+  const os = h.os || {}, rel = h.release || {}, pc = h.system || {}, board = h.board || {}, bios = h.bios || {};
+  const ramTotal = ram.reduce((a, r) => a + (r.Capacity || 0), 0);
+  return [
+    ['Processor', cpu.flatMap((c) => [
+      [tidy(c.Name), `${c.NumberOfCores} cores, ${c.NumberOfLogicalProcessors} threads`],
+      ['Rated clock', c.MaxClockSpeed ? `${ghz(c.MaxClockSpeed)} GHz` : '–'],
+      // Windows reports the caches in KB, or not at all on some chips.
+      ['Cache', `L2 ${c.L2CacheSize ? fmtB(c.L2CacheSize * 1024) : 'not reported'}, L3 ${c.L3CacheSize ? fmtB(c.L3CacheSize * 1024) : 'not reported'}`],
+      ['Socket', tidy(c.SocketDesignation) || '–'],
+    ])],
+    ['Memory', [
+      ['Installed', `${fmtB(ramTotal)} in ${ram.length} stick${ram.length === 1 ? '' : 's'}`],
+      ['Slots', h.slots ? `${h.slots} reported by the BIOS, ${Math.max(0, h.slots - ram.length)} free` : 'Not reported'],
+      // Numbered by Shimmy: some BIOSes give every stick the same slot name.
+      ...ram.map((r, i) => [`Stick ${i + 1}`, `${fmtB(r.Capacity)} ${RAM_TYPES[r.SMBIOSMemoryType] || ''} at ${r.ConfiguredClockSpeed || r.Speed} MT/s, ${tidy(r.Manufacturer)} ${tidy(r.PartNumber)}`.replace(/\s+/g, ' ')]),
+    ]],
+    ['Graphics', gpu.flatMap((g) => [
+      [tidy(g.Name), [g.Memory ? `${fmtB(g.Memory)} of its own memory` : '', g.CurrentHorizontalResolution ? `${g.CurrentHorizontalResolution} × ${g.CurrentVerticalResolution} at ${g.CurrentRefreshRate} Hz` : ''].filter(Boolean).join(', ') || '–'],
+      ['Driver', `${tidy(g.DriverVersion)}${g.DriverDate ? `, ${g.DriverDate}` : ''}`],
+    ])],
+    ['Drives', disks.map((d) => [tidy(d.FriendlyName), `${fmtB(d.Size)} ${[d.BusType, d.MediaType].filter((x) => x && x !== 'Unspecified').join(' ')}`.trim()])],
+    ['Windows', [
+      ['Edition', tidy(os.Caption)],
+      ['Version', `${rel.DisplayVersion ? rel.DisplayVersion + ', ' : ''}build ${os.BuildNumber}${rel.UBR ? '.' + rel.UBR : ''}, ${os.OSArchitecture}`],
+      ['Installed', os.InstallDate || '–'],
+      ['Last started', os.LastBoot || '–'],
+    ]],
+    ['Computer', [
+      ['Model', tidy(pc.Model)],
+      ['Maker', tidy(pc.Manufacturer)],
+      ['Board', `${tidy(board.Manufacturer)} ${tidy(board.Product)}`.trim()],
+      ['BIOS', `${tidy(bios.SMBIOSBIOSVersion)}${bios.ReleaseDate ? `, ${bios.ReleaseDate}` : ''}`],
+      ['Shimmy', h.shimmy],
+    ]],
+  ];
+}
+
+function renderSystem() {
+  const h = S.hw, cpu = (h.cpu || [])[0] || {}, gpu = h.gpu || [], os = h.os || {};
+  const ramTotal = (h.ram || []).reduce((a, r) => a + (r.Capacity || 0), 0);
+  $('#sysFacts').innerHTML = [
+    [cpu.NumberOfCores ? `${cpu.NumberOfCores} cores` : '–', tidy(cpu.Name) || 'Processor'],
+    [ramTotal ? fmtB(ramTotal) : '–', 'Memory'],
+    [String(gpu.length), gpu.length === 1 ? 'Graphics chip' : 'Graphics chips'],
+    [(h.release || {}).DisplayVersion || os.BuildNumber || '–', tidy(os.Caption) || 'Windows'],
+  ].map(([v, l]) => `<div><b>${esc(v)}</b><span>${esc(l)}</span></div>`).join('');
+  $('#sysInfo').innerHTML = sysGroups(h).map(([title, rows]) => `<div class="sys-group reveal in"><h3>${esc(title)}</h3><div class="rows">${rows.map(([k, v]) => `<div class="row"><b>${esc(k)}</b><span class="muted" title="${esc(v)}">${esc(v)}</span></div>`).join('') || '<div class="row"><span class="muted">Not reported</span></div>'}</div></div>`).join('');
+  $('#sysCopy').disabled = false;
+}
+
+function sysText(h) {
+  return [`Shimmy Optimizer ${h.shimmy}, system info`, ...sysGroups(h).flatMap(([title, rows]) => ['', title, ...rows.map(([k, v]) => `  ${k}: ${v}`)])].join('\n');
+}
+
 async function loadLog() {
   try {
     const rows = (await api('/api/log')).rows;
@@ -1524,6 +1774,8 @@ function setTab(t) {
   window.scrollTo(0, 0);
   if (t === 'startup') loadStartup();
   if (t === 'log') loadLog();
+  if (t === 'system') loadSystem();
+  if (t === 'programs') loadPrograms();
   if (t === 'apps') {
     const wrap = $('#tab-apps .table-wrap');
     wrap.classList.add('grow-in');
@@ -1543,6 +1795,17 @@ function setTab(t) {
 }
 
 document.addEventListener('click', async (e) => {
+  // A menu inside a row (the Apps page's priority) must not also open or close the row.
+  if (e.target.closest('select')) return;
+  const upd = e.target.closest('[data-app-update]');
+  if (upd) return confirmAppUpdate(upd.dataset.appUpdate);
+  const un = e.target.closest('[data-uninstall]');
+  if (un) return confirmUninstall(un.dataset.uninstall, un.dataset.name);
+  if (e.target.id === 'progCheck') {
+    try { await api('/api/programs/check'); } catch (err) { toast(err.message, true); }
+    return loadPrograms(false);
+  }
+  if (e.target.id === 'appsOpen2') return api('/api/apps-settings').catch((err) => toast(err.message, true));
   const del = e.target.closest('[data-del]');
   if (del) return previewDelete(del.dataset.del);
   const uc = e.target.closest('[data-ucat]');
@@ -1551,6 +1814,22 @@ document.addEventListener('click', async (e) => {
     if (id === 'apps') return api('/api/apps-settings').catch((err) => toast(err.message, true));
     if (id === 'yours' || id === 'appdata') { loadFolder(id === 'yours' ? prof : prof + '\\AppData'); return $('#folders').scrollIntoView({ behavior: 'smooth', block: 'center' }); }
     if (id !== 'free') return $('#sysFiles').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return;
+  }
+  const exp = e.target.closest('[data-export]');
+  if (exp) {
+    exp.disabled = true;
+    try {
+      const r = await api('/api/export', { what: exp.dataset.export, path: exp.dataset.export === 'folders' ? S.folderPath || null : null });
+      toast(`Saved “${r.name}” to Downloads.`);
+    } catch (err) { toast(err.message, true); }
+    exp.disabled = false;
+    return;
+  }
+  if (e.target.closest('[data-cool-start]')) return confirmCool();
+  if (e.target.closest('[data-cool-stop]')) return api('/api/cool/stop').then(refresh, (err) => toast(err.message, true));
+  if (e.target.id === 'sysCopy' && S.hw) {
+    try { await navigator.clipboard.writeText(sysText(S.hw)); toast('Copied. Paste it into your bug report.'); } catch (err) { toast('Windows did not allow copying: ' + err.message, true); }
     return;
   }
   if (e.target.id === 'binEmpty') return confirmEmptyBin();
@@ -1634,6 +1913,12 @@ document.addEventListener('click', async (e) => {
 });
 
 document.addEventListener('change', async (e) => {
+  if (e.target.id === 'coolSecs') { S.coolSecs = Number(e.target.value); return; }
+  if (e.target.dataset?.prioApp) {
+    const g = S.state.groups.find((x) => x.app === e.target.dataset.prioApp);
+    e.target.blur();
+    return g && e.target.value && setPriority(groupExes(g), e.target.value);
+  }
   if (e.target.dataset?.cat) {
     e.target.checked ? S.cleanSel.add(e.target.dataset.cat) : S.cleanSel.delete(e.target.dataset.cat);
     return loadClean();
@@ -1685,6 +1970,7 @@ $('#legend').addEventListener('mouseover', hoverSeg);
 $('#legend').addEventListener('focusin', hoverSeg);
 $('.map-block').addEventListener('mouseleave', () => focusSeg(null));
 $('#filter').addEventListener('input', (e) => { S.filter = e.target.value; if (S.state) renderApps(); });
+$('#progFilter').addEventListener('input', (e) => { S.progFilter = e.target.value; if (S.prog) renderPrograms(); });
 $('#trimBtn').addEventListener('click', trim);
 $('#usageBtn').addEventListener('click', async () => { S.folderLoaded = false; await api('/api/usage/scan'); loadStorage(); });
 $('#cleanRun').addEventListener('click', async () => { S.cleanWasRunning = true; await api('/api/clean/run', { ids: [...S.cleanSel] }); loadClean(); });
