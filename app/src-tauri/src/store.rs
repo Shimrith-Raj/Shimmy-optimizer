@@ -48,6 +48,12 @@ pub fn iso(ms: u64) -> String {
   format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.{millis:03}Z", tod / 3600, tod % 3600 / 60, tod % 60)
 }
 
+/// One CSV line, every field quoted, as the log and the exports write them.
+pub fn csv_row(fields: &[&str]) -> String {
+  let q: Vec<String> = fields.iter().map(|s| format!("\"{}\"", s.replace('"', "\"\""))).collect();
+  format!("{}\n", q.join(","))
+}
+
 static CSV_FIELD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#""((?:[^"]|"")*)""#).unwrap());
 
 impl Store {
@@ -97,7 +103,7 @@ impl Store {
     let _ = fs::write(self.dir.join("cpu-history.json"), cpu);
   }
 
-  fn log_file(&self) -> PathBuf {
+  pub fn log_file(&self) -> PathBuf {
     self.dir.join("actions-log.csv")
   }
 
@@ -105,8 +111,7 @@ impl Store {
     let _guard = self.log_lock.lock().unwrap();
     let path = self.log_file();
     let fresh = !path.exists();
-    let q = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
-    let line = format!("{},{},{},{}\n", q(&iso(now_ms())), q(action), q(target), q(detail));
+    let line = csv_row(&[&iso(now_ms()), action, target, detail]);
     if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(path) {
       let _ = f.write_all(format!("{}{line}", if fresh { "time,action,target,detail\n" } else { "" }).as_bytes());
     }
@@ -153,5 +158,10 @@ mod tests {
   fn iso_matches_javascript() {
     assert_eq!(super::iso(1_793_116_881_123), "2026-10-27T16:01:21.123Z");
     assert_eq!(super::iso(0), "1970-01-01T00:00:00.000Z");
+  }
+
+  #[test]
+  fn csv_quotes_every_field() {
+    assert_eq!(super::csv_row(&["a", "say \"hi\"", "x,y"]), "\"a\",\"say \"\"hi\"\"\",\"x,y\"\n");
   }
 }

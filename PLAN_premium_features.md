@@ -82,6 +82,45 @@ Each phase ends with unit tests for any new gate, an installer, and screenshots.
 **Before P1:** merge Phase 10. 10a (marks), 10b+10c and 10d sit on three branches with overlapping version numbers and
 changes to `lib.rs`, `app.js` and `PLAN.md`.
 
+## P1 Step 1 results (run 2026-10-29, on battery, not elevated)
+
+- **A2:** `PowerSetActiveOverlayPowerScheme` does not exist. `powrprof.dll` exports `PowerSetActiveOverlayScheme(GUID)`,
+  `PowerGetEffectiveOverlayScheme`, `PowerGetActualOverlayScheme` and `PowerGetOverlaySchemes`, and the `windows` crate
+  has none of them, so they are linked by hand. Setting Best performance (`ded574b5-…`) and back returned 0 without
+  elevation, and the base plan stayed Balanced. The overlay survives heat protection's `powercfg /setactive`, so the two
+  do not fight. Overlay GUIDs: Best efficiency `961cc777-2547-4f9d-8174-7d86181b8a7a`, Balanced is the empty GUID, Best
+  performance `ded574b5-45a0-4f42-8737-46345c09c238`.
+- **A2 defaults (owner):** Best performance on the charger, Balanced on battery. Off until switched on.
+- **A3:** not testable without elevation. `SRSetRestorePointW` needs the `Win32_System_Restore` feature. Failures
+  (protection off, one-per-24 h) are logged and shown, and the clean-up still runs.
+
+## P1 built (2026-10-29, v0.7.0, not committed or released)
+
+- **A1** `hw.rs` + System page: one hidden PowerShell CIM query (about 5 s, kept until the window closes), VRAM from the
+  display class keys, drives from `Get-PhysicalDisk`. No serials. Copy uses the WebView clipboard. Sticks are numbered by
+  Shimmy because this BIOS calls both "DIMM 0".
+- **A2** `power.rs`: `PowerPrefs` in settings (off by default), `power_watch` in `automation`, restore in `exit_app`, at
+  start-up when follow is off, and when switched off.
+- **A3** `clean::restore_point` + `restore_point_first`: before DISM clean-up, big finder deletes and folder deletes for
+  good. Shimmy keeps to one a day (`restore_point_at`). Not yet run elevated: check the Log after the first real use.
+- **A4** `export_csv`: finder results, the current biggest-folders view and the whole Log, to Downloads (UTF-8 with BOM).
+- **A5** `cool.rs` + Processor page: refused without a temperature or above 85 °C. Not run on the real elevated build yet.
+- **A6** `alerts.junkGb` (default 5 GB, 0 is off): hourly scan on its own thread, at most once a day.
+- **A7** clean category `recent`, off by default, to the Recycle Bin, keeps Explorer's Quick access jump list.
+
+## P2 built (2026-10-30, not committed or released)
+
+- **Step 1:** winget 1.29 lists 24 updates in about 5 s; 66 apps in the Uninstall keys (46 with a size, 12 MSI); install
+  dates come as `20261028` or `5/13/2026`.
+- **A9** `programs.rs` + Programs page: installed apps by size. The page sends only the registry key; Rust re-reads the
+  uninstall command, turns `msiexec /I` into `/X`, refuses Shimmy itself, and runs one uninstaller at a time.
+- **A8** winget table parsed by header word positions (language-independent), cut-off ids dropped, ids checked by regex
+  and against the last list. One update at a time, logged. Hidden when winget is missing.
+- **A11** `prio.rs`: Below normal, Low, Efficiency mode (Low + EcoQoS). Set per app in its expanded row on the Apps page,
+  same built-in gate as Safe marks, applied every 30 s to new processes, put back on Exit. Not reverted after a crash
+  (Windows keeps a process's priority until it exits).
+- Version still 0.7.0: bump to 0.8.0 if P1 and P2 ship separately.
+
 ## Risks
 
 1. **Overpromising.** The copy rule (rule 4) applies to the README too. "Pro features, free" is the pitch, not "faster PC".

@@ -22,7 +22,9 @@
     <button data-tab="clean"><svg viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z"/></svg>Clean</button>
     <button data-tab="battery"><svg viewBox="0 0 24 24"><path d="M3 8h15v8H3zM21 11v2M6 11v2M9 11v2"/></svg>Battery</button>
     <button data-tab="apps"><svg viewBox="0 0 24 24"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></svg>Apps</button>
+    <button data-tab="programs"><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM4 9h16M8 13h8M8 16h5"/></svg>Programs</button>
     <button data-tab="startup"><svg viewBox="0 0 24 24"><path d="M12 3v9M6.3 6.3a8 8 0 1 0 11.4 0"/></svg>Startup</button>
+    <button data-tab="system"><svg viewBox="0 0 24 24"><path d="M3 5h18v11H3zM8 20h8M12 16v4"/></svg>System</button>
     <button data-tab="log"><svg viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 9h8M8 13h8M8 17h5"/></svg>Log</button>
     <button data-tab="settings"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6"/></svg>Settings</button>
     <button data-tab="updates"><svg viewBox="0 0 24 24"><path d="M12 4v10M7.5 10 12 14.5 16.5 10M4 19h16"/></svg>Updates<i class="mark" id="updMark" hidden title="A new version is available"></i></button>
@@ -105,6 +107,11 @@
       <div id="fanCtl"></div>
     </div>
 
+    <div class="recs-block reveal">
+      <div class="block-head"><h2>Cooling check</h2><span class="muted">A short full-load test, only when you start it</span></div>
+      <div id="coolCtl"></div>
+    </div>
+
     <div class="cores-block reveal">
       <div class="block-head"><h2 id="cpuName">Cores</h2><span class="muted" id="coreCaption"></span></div>
       <div id="cores" class="cores"></div>
@@ -184,7 +191,7 @@
     </div>
 
     <div class="recs-block reveal">
-      <div class="block-head"><h2>Biggest folders</h2><div class="crumbs" id="crumbs"></div></div>
+      <div class="block-head"><h2>Biggest folders</h2><div class="head-acts"><div class="crumbs" id="crumbs"></div><button class="btn ghost small" data-export="folders">Export</button></div></div>
       <div id="folders" class="folders"></div>
     </div>
 
@@ -214,7 +221,7 @@
       </div>
       <div class="hero-act">
         <button class="btn big" id="cleanRun">Clean selected</button>
-        <p class="note">Temporary files and caches are deleted for good; apps rebuild them as they need them. Nothing here touches your documents.</p>
+        <p class="note">Temporary files and caches are deleted for good; apps rebuild them as they need them. Recent items go to the Recycle Bin. Nothing here touches your documents.</p>
         <button class="btn ghost" id="cleanRescan">Measure again</button>
       </div>
     </div>
@@ -226,7 +233,7 @@
     </div>
 
     <div class="recs-block reveal">
-      <div class="block-head"><h2>Big and duplicate files</h2><button class="btn ghost small" id="finderBtn">Look for them</button></div>
+      <div class="block-head"><h2>Big and duplicate files</h2><div class="head-acts"><button class="btn ghost small" data-export="finder" id="finderExport" hidden>Export</button><button class="btn ghost small" id="finderBtn">Look for them</button></div></div>
       <p class="lead">Looks in Downloads, Desktop, Documents, Videos and Pictures. Never inside code projects, protected work folders, hidden files or your Keep list. Nothing is ticked for you, and what you remove goes to the Recycle Bin.</p>
       <div id="finder"></div>
       <div class="finder-bar" id="finderBar" hidden><span id="finderSel"></span><button class="btn danger" id="finderDelete">Move to Recycle Bin</button></div>
@@ -266,8 +273,22 @@
       <h2>Every app in memory</h2>
       <input id="filter" type="search" placeholder="Filter apps and processes" aria-label="Filter apps and processes">
     </div>
-    <p class="muted lead">Sizes are working set, what each process holds in RAM right now. Shared memory can be counted in more than one process.</p>
+    <p class="muted lead">Sizes are working set, what each process holds in RAM right now. Shared memory can be counted in more than one process. The priority menu lowers an app in the background, so the one you are using gets the processor first; Efficiency mode also lets Windows run it on less power. Shimmy puts every app back when it exits.</p>
     <div class="table-wrap"><table id="appsTable"><thead><tr><th></th><th>App</th><th class="num">Processes</th><th class="num">Memory</th><th class="bar-col"></th><th></th></tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <section id="tab-programs" hidden>
+    <div class="page-head reveal"><h2>Programs</h2><button class="btn ghost" id="progCheck">Check for updates</button></div>
+    <p class="muted lead">Updates come from winget, Windows' own app installer, and run one at a time after you confirm. Uninstall starts the app's own uninstaller, which asks you the rest. Store apps are on Windows' Installed apps page.</p>
+    <div class="recs-block reveal">
+      <div class="block-head"><h2>Updates</h2><span class="muted" id="progUpdNote"></span></div>
+      <div id="progUpdates" class="folders"></div>
+    </div>
+    <div class="recs-block reveal">
+      <div class="block-head"><h2>Installed apps</h2><div class="head-acts"><input id="progFilter" type="search" placeholder="Filter apps" aria-label="Filter installed apps"><button class="btn ghost small" id="appsOpen2">Windows' Installed apps</button></div></div>
+      <p class="map-caption">Biggest first. Sizes are each installer's own estimate, so some are missing or out of date.</p>
+      <div id="progList" class="folders"></div>
+    </div>
   </section>
 
   <section id="tab-startup" hidden>
@@ -276,9 +297,16 @@
     <div class="table-wrap"><table id="startupTable"><thead><tr><th>Name</th><th>Command</th><th>Source</th><th>Hint</th><th class="num">Enabled</th></tr></thead><tbody></tbody></table></div>
   </section>
 
+  <section id="tab-system" hidden>
+    <div class="page-head reveal"><h2>This PC</h2><button class="btn ghost" id="sysCopy" disabled>Copy for a bug report</button></div>
+    <p class="muted lead">What is inside, from Windows' own hardware inventory. Read only. Serial numbers are not read, so the copied text is safe to paste anywhere.</p>
+    <div class="facts reveal" id="sysFacts"></div>
+    <div id="sysInfo"></div>
+  </section>
+
   <section id="tab-log" hidden>
-    <div class="page-head reveal"><h2>Everything Shimmy has done</h2></div>
-    <p class="muted lead">Every close, trim and startup change, including what RAM Optimizer did before Shimmy replaced it.</p>
+    <div class="page-head reveal"><h2>Everything Shimmy has done</h2><button class="btn ghost" data-export="log">Export all</button></div>
+    <p class="muted lead">Every close, trim and startup change, including what RAM Optimizer did before Shimmy replaced it. The newest 100 are shown here; Export all saves every entry to Downloads.</p>
     <div class="table-wrap"><table id="logTable"><thead><tr><th>Time</th><th>Action</th><th>Target</th><th>Detail</th></tr></thead><tbody></tbody></table></div>
   </section>
 

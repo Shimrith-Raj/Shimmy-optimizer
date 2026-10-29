@@ -8,7 +8,7 @@ A Windows 11 system tool for one laptop (ASUS Vivobook M3500QC: Ryzen 7 5800HS, 
 Built with **Tauri 2** (Rust core, vanilla HTML/CSS/JS UI). It **always runs as Administrator** and lives in the tray.
 
 ## Pages
-Home (four readouts and Clean now) · Memory · Processor · Graphics · Storage · Clean · Battery · Apps · Startup · Log · Settings · Updates.
+Home (four readouts and Clean now) · Memory · Processor · Graphics · Storage · Clean · Battery · Apps · Programs · Startup · System · Log · Settings · Updates.
 
 ## Layout
 | Path | Purpose |
@@ -22,6 +22,7 @@ Home (four readouts and Clean now) · Memory · Processor · Graphics · Storage
 | `gpu.rs` | Graphics page, any vendor: Windows' GPU Engine counters (every adapter, per engine and per app), the graphics kernel's D3DKMT readout (temperature, clocks, fan, power share; a sleeping dedicated card is never asked) and NVML for NVIDIA detail (only while a page asks), merged per adapter |
 | `storage.rs`, `clean.rs`, `finder.rs`, `jobs.rs` | Storage page, safe clean and DISM, big and duplicate finder with its deletion gate, background jobs |
 | `update.rs` | Updates page: reads GitHub's latest release, downloads `Shimmy-Optimizer-Setup.exe` to `%ProgramData%\Shimmy Optimizer\updates` (administrators-only), checks its SHA-256, starts it. The only network use in Shimmy, all in Rust |
+| `heat.rs` | Heat protection: processor boost off at 90 °C, back on at 75 °C, through powercfg; saved and restored |
 | `hold.rs` | Run from the charger: hold level, plug-in re-hold, override and drain warnings |
 | `battery.rs`, `asus.rs` | Battery page; ASUS ATK (`\\.\ATKACPI`) for fans and the charge limit |
 | `auto.rs` | Alerts, automatic memory clean, weekly clean: pure decision functions, unit-tested |
@@ -44,7 +45,7 @@ Data lives in `%APPDATA%\com.shimmy.optimizer\`: `settings.json`, `history.json`
   `releases/latest/download/Shimmy-Optimizer-Setup.exe`, so any other name breaks them.
 - **Dev build:** `SHIMMY_NO_ADMIN=1 CARGO_TARGET_DIR=src-tauri/target-dev npx tauri build --no-bundle --config '{"identifier":"com.shimmy.optimizer.dev"}'`.
   It has no admin manifest and its own data folder, so it runs beside the real Shimmy. It has no CPU temperature, and Start with Windows is refused.
-- **Tests:** in `app/src-tauri`, `SHIMMY_NO_ADMIN=1 CARGO_TARGET_DIR=target-dev cargo test` (73 tests). Real-PC checks: add `--test real_scan -- --ignored`. They read only, except `set_limit`, which
+- **Tests:** in `app/src-tauri`, `SHIMMY_NO_ADMIN=1 CARGO_TARGET_DIR=target-dev cargo test` (89 tests). Real-PC checks: add `--test real_scan -- --ignored`. They read only, except `set_limit`, which
   writes the charge limit and runs only when `SHIMMY_LIMIT` is set.
 - The frontend is embedded in the exe, so UI changes need a rebuild. An elevated Shimmy that is running locks its exe: quit it from the tray first.
 
@@ -54,4 +55,4 @@ Data lives in `%APPDATA%\com.shimmy.optimizer\`: `settings.json`, `history.json`
 - Everything destructive or automatic is logged to `actions-log.csv`.
 
 ## State
-Phases 0 to 8 are done (Phase 8: lean Shimmy, about 37 MB in the tray, and deleting from Storage; v0.3.0, 2026-10-28). Still open: the taste-skill inspection pass on the UI. See `PLAN.md` § Progress.
+Phases 0 to 10 are done and merged (v0.5.1, 2026-10-28). `PLAN_premium_features.md` P1 and P2 are built (uncommitted, v0.7.0); P3 is next. Still open: the taste-skill inspection pass on the UI. See `PLAN.md` § Progress.
