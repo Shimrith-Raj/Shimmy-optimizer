@@ -99,7 +99,13 @@ fn powercfg(args: &[&str]) -> Result<String, String> {
 fn active_scheme(text: &str) -> Option<String> {
   let after = text.split("GUID:").nth(1)?.trim();
   let guid = after.split_whitespace().next()?;
-  (guid.len() == 36).then(|| guid.to_string())
+  valid_scheme(guid).then(|| guid.to_string())
+}
+
+/// A power plan GUID as powercfg prints it (8-4-4-4-12 hex digits). Anything else is never passed to powercfg.
+pub fn valid_scheme(g: &str) -> bool {
+  let parts: Vec<&str> = g.split('-').collect();
+  parts.iter().map(|p| p.len()).eq([8, 4, 4, 4, 12]) && parts.iter().all(|p| p.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
 /// The AC and DC values from `powercfg /qh ... PERFBOOSTMODE` ("Current AC Power Setting Index: 0x00000002").
@@ -127,7 +133,12 @@ fn set_boost(scheme: &str, ac: u32, dc: u32) -> Result<(), String> {
 pub fn boost_off(now: u64) -> Result<SavedBoost, String> {
   let scheme = active_scheme(&powercfg(&["/getactivescheme"])?).ok_or("Windows did not name its power plan.")?;
   let (ac, dc) = boost_values(&powercfg(&["/qh", &scheme, "SUB_PROCESSOR", "PERFBOOSTMODE"])?).ok_or("Windows did not report the boost setting.")?;
-  set_boost(&scheme, 0, 0)?;
+  // If a later step fails after the AC value was written, the old values go back at once: nothing is saved to restore
+  // them from otherwise.
+  if let Err(e) = set_boost(&scheme, 0, 0) {
+    let _ = set_boost(&scheme, ac, dc);
+    return Err(e);
+  }
   Ok(SavedBoost { scheme, ac, dc, since: now })
 }
 
@@ -185,5 +196,7 @@ mod tests {
     let q = "      Possible Setting Index: 006\r\n      Possible Setting Friendly Name: Efficient Aggressive At Guaranteed\r\n    Current AC Power Setting Index: 0x00000002\r\n    Current DC Power Setting Index: 0x00000001\r\n";
     assert_eq!(boost_values(q), Some((2, 1)));
     assert_eq!(boost_values("nothing"), None);
+    assert!(valid_scheme("381b4222-f694-41f0-9685-ff5bb260df2e"));
+    assert!(!valid_scheme("381b4222-f694-41f0-9685-ff5bb260df2e /x") && !valid_scheme("/hibernate") && !valid_scheme(""));
   }
 }

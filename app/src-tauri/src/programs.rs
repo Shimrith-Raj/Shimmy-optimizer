@@ -101,15 +101,35 @@ pub fn msi_uninstall(exe: &str, args: &str) -> String {
   if is_msi { args.replacen("/I{", "/X{", 1).replacen("/i{", "/X{", 1) } else { args.to_string() }
 }
 
-/// The app's name and its uninstall command (program, arguments), read again from the registry for this key.
-pub fn uninstall_command(key: &str) -> Result<(String, String, String), String> {
+/// Apps installed just for this user are listed under HKCU, which any program the user runs can write. Shimmy runs as
+/// administrator, so it never starts their uninstall command itself: the page sends those to Windows' Installed apps.
+pub fn per_user(key: &str) -> bool {
+  key.starts_with("HKCU\\")
+}
+
+/// The app's name and its uninstall command as listed, read again from the registry for this key.
+fn entry(key: &str) -> Result<(String, String), String> {
   let (prefix, sub) = key.split_once('\\').ok_or("Shimmy does not know that app.")?;
   if sub.is_empty() || sub.contains('\\') {
     return Err("Shimmy does not know that app.".into());
   }
   let (_, hive, view) = roots().into_iter().find(|(p, _, _)| *p == prefix).ok_or("Shimmy does not know that app.")?;
   let k = hive.open_subkey_with_flags(format!("{UNINSTALL}\\{sub}"), KEY_READ | view).map_err(|_| "That app is no longer installed.")?;
-  let (name, cmd) = listed(&k).ok_or("Windows does not offer an uninstaller for that app.")?;
+  listed(&k).ok_or_else(|| "Windows does not offer an uninstaller for that app.".to_string())
+}
+
+/// The name of an app Shimmy listed, for a key the page sent back.
+pub fn name_of(key: &str) -> Result<String, String> {
+  entry(key).map(|e| e.0)
+}
+
+/// The app's name and its uninstall command (program, arguments). Only for apps installed for all users (HKLM, which
+/// only administrators can write).
+pub fn uninstall_command(key: &str) -> Result<(String, String, String), String> {
+  if per_user(key) {
+    return Err("That app was installed just for you, so Shimmy does not start its uninstaller as administrator. Use Windows' Installed apps page.".into());
+  }
+  let (name, cmd) = entry(key)?;
   if name.eq_ignore_ascii_case("Shimmy Optimizer") {
     return Err("Shimmy cannot uninstall itself. Use Windows' Installed apps page.".into());
   }
@@ -161,11 +181,32 @@ pub fn parse_upgrades(text: &str) -> Vec<Upgrade> {
     .collect()
 }
 
+/// Whether `loc` is winget's own package folder: under Program Files\WindowsApps (which only Windows can write) and
+/// named for Microsoft's App Installer package.
+pub fn winget_dir_ok(loc: &str, program_files: &str) -> bool {
+  let (loc, base) = (loc.trim().to_ascii_lowercase(), format!("{}\\windowsapps\\", program_files.trim_end_matches('\\').to_ascii_lowercase()));
+  let Some(name) = loc.strip_prefix(&base) else { return false };
+  !name.contains('\\') &&!name.contains("..") && name.starts_with("microsoft.desktopappinstaller_") && name.ends_with("__8wekyb3d8bbwe")
+}
+
+/// winget.exe in its package folder, found through Windows' package list. Never `winget.exe` by name: that is found
+/// through the user's PATH, and its usual folder (%LOCALAPPDATA%\Microsoft\WindowsApps) is one the user can write to,
+/// so a planted copy would run as administrator. None when App Installer is not on this PC.
+fn winget_exe() -> Option<std::path::PathBuf> {
+  let ps = crate::clean::known("SystemRoot")?.join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
+  let pf = crate::clean::known("ProgramFiles")?;
+  let out = crate::clean::hidden(&ps.to_string_lossy(), &["-NoProfile", "-NonInteractive", "-Command", "(Get-AppxPackage -Name Microsoft.DesktopAppInstaller).InstallLocation"]).ok()?;
+  let text = String::from_utf8_lossy(&out.stdout);
+  let loc = text.lines().map(str::trim).find(|l| winget_dir_ok(l, &pf.to_string_lossy()))?;
+  Some(std::path::Path::new(loc).join("winget.exe")).filter(|p| p.is_file())
+}
+
 const AGREE: [&str; 3] = ["--accept-source-agreements", "--disable-interactivity", "--nowarn"];
 
 /// Apps with an update, or None when winget is not on this PC.
 pub fn upgrades() -> Result<Option<Vec<Upgrade>>, String> {
-  let out = match crate::clean::hidden("winget.exe", &[&["upgrade"][..], &AGREE[..]].concat()) {
+  let Some(exe) = winget_exe() else { return Ok(None) };
+  let out = match crate::clean::hidden(&exe.to_string_lossy(), &[&["upgrade"][..], &AGREE[..]].concat()) {
     Ok(o) => o,
     Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
     Err(e) => return Err(format!("Could not start winget: {e}")),
@@ -179,7 +220,8 @@ pub fn upgrade(id: &str) -> Result<(), String> {
     return Err("That is not a winget package id.".into());
   }
   let args = [&["upgrade", "--id", id, "--exact", "--accept-package-agreements"][..], &AGREE[..]].concat();
-  let out = crate::clean::hidden("winget.exe", &args).map_err(|e| format!("Could not start winget: {e}"))?;
+  let exe = winget_exe().ok_or("winget, Windows' app installer, is not on this PC.")?;
+  let out = crate::clean::hidden(&exe.to_string_lossy(), &args).map_err(|e| format!("Could not start winget: {e}"))?;
   if out.status.success() {
     return Ok(());
   }
@@ -220,6 +262,17 @@ The following packages have an upgrade available, but require explicit targeting
     assert_eq!(msi_uninstall("MsiExec.exe", "/I{1234-ABCD}"), "/X{1234-ABCD}");
     assert_eq!(msi_uninstall(r"C:\App\unins000.exe", "/I{x}"), "/I{x}", "only for Windows Installer");
     assert_eq!(split_command("no program here"), None);
+  }
+
+  #[test]
+  fn only_trusted_uninstallers_and_winget() {
+    assert!(per_user(r"HKCU\{abc}") && !per_user(r"HKLM\{abc}") && !per_user(r"HKLM32\Foo"));
+    assert!(uninstall_command(r"HKCU\Anything").unwrap_err().contains("just for you"));
+    let pf = r"C:\Program Files";
+    assert!(winget_dir_ok(r"C:\Program Files\WindowsApps\Microsoft.DesktopAppInstaller_1.29.379.0_x64__8wekyb3d8bbwe", pf));
+    assert!(!winget_dir_ok(r"C:\Users\me\AppData\Local\Microsoft\WindowsApps", pf), "the user-writable alias folder");
+    assert!(!winget_dir_ok(r"C:\Program Files\WindowsApps\Evil_1.0_x64__abc", pf));
+    assert!(!winget_dir_ok(r"C:\Program Files\WindowsApps\Microsoft.DesktopAppInstaller_1_x64__8wekyb3d8bbwe\..\x", pf));
   }
 
   #[test]

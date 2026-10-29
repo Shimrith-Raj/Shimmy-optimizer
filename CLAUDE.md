@@ -19,7 +19,8 @@ Tauri maps camelCase JS keys to snake_case Rust parameters. Example end to end: 
 `refresh()` (runs every 5 s for the visible tab). `data-goto="x"` on any element switches tabs.
 
 **A setting.** `struct Settings` in `lib.rs` is `#[serde(rename_all = "camelCase", default)]`, so a new field needs a
-`Default`, and old `settings.json` files still load. Clamp it in `auto::clamp`. **A field Shimmy writes itself must be
+`Default`, and old `settings.json` files still load. Clamp it in `auto::clamp` or `sanitize` (`lib.rs`), which runs on
+the page's copy and on `settings.json` at start-up alike (any program can edit that file). **A field Shimmy writes itself must be
 added to the carry-over in `set_settings`** (the "Kept by Shimmy, not by the page." block), or the page's stale copy
 overwrites it. UI: `renderSettings` with the helpers `block`, `sw`, `num`, `field` and `data-set="dotted.path"`.
 The change handler coerces with `Number()`, so a string select needs its own branch.
@@ -34,8 +35,9 @@ last 100 rows, newest first. `log_file()` is private.
 them from `start_sampler`, which ticks every 3 s. Anything slow (a disk walk or the network) is spawned on its own thread,
 never run in the tick (see the daily update check).
 
-**A Clean category.** `const DEFS: [Def; N]` in `clean.rs` (`Def {id, title, why, default_on}`), paths in `targets(id)`,
-sizes from `scan`, and the delete in `run` through `delete_files`, which is a **permanent** `fs::remove_file`. The
+**A Clean category.** `const DEFS: [Def; N]` in `clean.rs` (`Def {id, title, why, default_on}`), paths in `targets(id)`
+(base folders only from `clean::known`, Windows' known folders, never from environment variables such as TEMP), sizes
+from `scan`, and the delete in `run` through `delete_files`, which is a **permanent** `fs::remove_file`. The
 Recycle Bin route is `trash::delete_all`, used by `caches.rs`.
 
 ## Where things are
@@ -58,7 +60,9 @@ Recycle Bin route is `trash::delete_all`, used by `caches.rs`.
   `Folder {path, bytes, filesHere, children}`, capped at 40 children. Folder deletes go through `folder_delete`, gated by
   `storage::check_folder`.
 - **System queries** use no WMI yet. Command-line tools run hidden through `clean::hidden(exe, args)` (powercfg,
-  vssadmin, dism).
+  vssadmin, dism). Shimmy runs as administrator, so it never runs anything a standard user can plant: winget is run
+  from its package folder (`programs::winget_exe`, not by name through PATH), and uninstallers only from HKLM (apps
+  installed just for the user open Windows' Installed apps page, `programs::per_user`).
 
 - **Premium P1/P2 modules**: `hw.rs` (System page), `power.rs` (power mode follows the charger, hand-linked powrprof
   overlay calls), `cool.rs` (cooling check), `programs.rs` (installed apps, winget updates), `prio.rs` (background
@@ -81,6 +85,6 @@ and is not the app version.
 
 ## Tests
 
-Run them in `app/src-tauri`: `SHIMMY_NO_ADMIN=1 CARGO_TARGET_DIR=target-dev cargo test`. That is 87 unit tests, plus 2 in
+Run them in `app/src-tauri`: `SHIMMY_NO_ADMIN=1 CARGO_TARGET_DIR=target-dev cargo test`. That is 91 unit tests, plus 2 in
 `tests/parity.rs`. The real-PC checks are `--test real_scan -- --ignored`. Every new gate or decision function gets unit
 tests in the same style.

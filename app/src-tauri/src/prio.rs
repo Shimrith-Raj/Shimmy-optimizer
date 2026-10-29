@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use windows::Win32::Foundation::CloseHandle;
 use windows::Win32::System::Threading::{
-  GetPriorityClass, OpenProcess, SetPriorityClass, SetProcessInformation, ProcessPowerThrottling, BELOW_NORMAL_PRIORITY_CLASS, IDLE_PRIORITY_CLASS,
+  GetPriorityClass, OpenProcess, SetPriorityClass, SetProcessInformation, ProcessPowerThrottling, BELOW_NORMAL_PRIORITY_CLASS, IDLE_PRIORITY_CLASS, NORMAL_PRIORITY_CLASS,
   PROCESS_CREATION_FLAGS, PROCESS_POWER_THROTTLING_CURRENT_VERSION, PROCESS_POWER_THROTTLING_EXECUTION_SPEED, PROCESS_POWER_THROTTLING_STATE,
   PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_INFORMATION,
 };
@@ -59,6 +59,13 @@ pub fn plan(running: &[(u32, String)], wanted: &BTreeMap<String, Level>, applied
     .collect();
   let back = applied.iter().filter(|(pid, a)| !wanted.contains_key(&a.0) && running.iter().any(|(p, _)| p == *pid)).map(|(pid, _)| *pid).collect();
   (set, back)
+}
+
+/// The class to put a process back to, from the one it had when Shimmy first lowered it. A process already at Below
+/// normal or Low was most likely lowered by an earlier Shimmy that was closed without putting it back (a crash or a
+/// kill: what Shimmy changed is kept only in memory), so it goes back to Normal rather than staying low for good.
+pub fn original(class: u32) -> u32 {
+  if class == BELOW_NORMAL_PRIORITY_CLASS.0 || class == IDLE_PRIORITY_CLASS.0 { NORMAL_PRIORITY_CLASS.0 } else { class }
 }
 
 fn throttle(h: windows::Win32::Foundation::HANDLE, on: bool) -> bool {
@@ -119,5 +126,9 @@ mod tests {
     assert_eq!(parse_level("eco"), Ok(Some(Level::Eco)));
     assert_eq!(parse_level("normal"), Ok(None));
     assert!(parse_level("realtime").is_err(), "never higher than normal");
+    assert_eq!(original(0x20), 0x20, "Normal stays Normal");
+    assert_eq!(original(0x8000), 0x8000, "Above normal is put back as it was");
+    assert_eq!(original(0x4000), 0x20, "left Below normal by an earlier Shimmy: back to Normal");
+    assert_eq!(original(0x40), 0x20, "left Low by an earlier Shimmy: back to Normal");
   }
 }

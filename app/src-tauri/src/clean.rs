@@ -75,8 +75,28 @@ pub fn categories() -> Vec<(&'static str, &'static str)> {
   DEFS.iter().map(|d| (d.id, d.title)).collect()
 }
 
-fn env_path(var: &str) -> PathBuf {
-  PathBuf::from(std::env::var_os(var).unwrap_or_default())
+/// A standard folder, asked of Windows by the name of the environment variable that usually holds it. Never read from
+/// the environment itself: Shimmy deletes as administrator, and a user's own variable (TEMP=D:\, or one set by any
+/// program) could point a clean at a whole drive or at Windows. None when Windows cannot name it, and then the targets
+/// under it are skipped.
+pub fn known(var: &str) -> Option<PathBuf> {
+  use windows::Win32::System::Com::CoTaskMemFree;
+  use windows::Win32::UI::Shell::{
+    FOLDERID_LocalAppData, FOLDERID_Profile, FOLDERID_ProgramData, FOLDERID_ProgramFiles, FOLDERID_RoamingAppData, FOLDERID_Windows, SHGetKnownFolderPath, KF_FLAG_DEFAULT,
+  };
+  let id = match var {
+    "LOCALAPPDATA" => &FOLDERID_LocalAppData,
+    "APPDATA" => &FOLDERID_RoamingAppData,
+    "ProgramData" => &FOLDERID_ProgramData,
+    "SystemRoot" => &FOLDERID_Windows,
+    "USERPROFILE" => &FOLDERID_Profile,
+    "ProgramFiles" => &FOLDERID_ProgramFiles,
+    _ => return None,
+  };
+  let p = unsafe { SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None) }.ok()?;
+  let s = unsafe { p.to_string() };
+  unsafe { CoTaskMemFree(Some(p.0 as _)) };
+  s.ok().map(PathBuf::from).filter(|p| p.is_absolute() && p.parent().is_some())
 }
 
 /// Folder to clean, with a minimum file age and an optional file-name filter.
@@ -92,7 +112,7 @@ fn dir(p: PathBuf) -> Target {
 }
 
 fn browser(id: &str) -> Option<(&'static str, PathBuf)> {
-  let local = env_path("LOCALAPPDATA");
+  let local = known("LOCALAPPDATA")?;
   match id {
     "brave" => Some(("brave.exe", local.join(r"BraveSoftware\Brave-Browser\User Data"))),
     "chrome" => Some(("chrome.exe", local.join(r"Google\Chrome\User Data"))),
@@ -103,11 +123,12 @@ fn browser(id: &str) -> Option<(&'static str, PathBuf)> {
 
 fn targets(id: &str) -> Vec<Target> {
   let day = Duration::from_secs(24 * 3600);
-  let local = env_path("LOCALAPPDATA");
-  let windows = env_path("SystemRoot");
-  let program_data = env_path("ProgramData");
+  let (Some(local), Some(windows), Some(program_data), Some(roaming)) = (known("LOCALAPPDATA"), known("SystemRoot"), known("ProgramData"), known("APPDATA")) else {
+    return Vec::new();
+  };
   match id {
-    "user-temp" => vec![Target { min_age: day, ..dir(std::env::temp_dir()) }],
+    // The standard per-user temp folder, not %TEMP% (see `known`).
+    "user-temp" => vec![Target { min_age: day, ..dir(local.join("Temp")) }],
     "win-temp" => vec![Target { min_age: day, ..dir(windows.join("Temp")) }],
     "thumbs" => vec![Target {
       recursive: false,
@@ -129,7 +150,7 @@ fn targets(id: &str) -> Vec<Target> {
     "delivery" => vec![dir(windows.join(r"ServiceProfiles\NetworkService\AppData\Local\Microsoft\Windows\DeliveryOptimization\Cache"))],
     "wu" => vec![dir(windows.join(r"SoftwareDistribution\Download"))],
     "recent" => {
-      let recent = env_path("APPDATA").join(r"Microsoft\Windows\Recent");
+      let recent = roaming.join(r"Microsoft\Windows\Recent");
       vec![
         Target { recursive: false, only: Some(|n| n.to_ascii_lowercase().ends_with(".lnk")), ..dir(recent.clone()) },
         Target { recursive: false, only: Some(is_jump_list), ..dir(recent.join("AutomaticDestinations")) },
@@ -474,6 +495,15 @@ pub fn restore_point(what: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+  #[test]
+  fn standard_folders_come_from_windows() {
+    let local = super::known("LOCALAPPDATA").unwrap();
+    assert!(local.is_absolute() && local.ends_with(r"AppData\Local"));
+    assert!(super::known("SystemRoot").unwrap().join("explorer.exe").is_file());
+    assert!(super::known("TEMP").is_none(), "never read from the environment");
+    assert!(super::targets("user-temp")[0].dir.ends_with(r"AppData\Local\Temp"));
+  }
+
   #[test]
   fn jump_lists_keep_quick_access() {
     assert!(super::is_jump_list("5f7b5f1e01b83767.automaticDestinations-ms"));

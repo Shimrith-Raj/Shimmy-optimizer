@@ -550,6 +550,10 @@ async function loadFolder(path) {
 
 // ---------- Storage: deleting, old caches, system files ----------
 
+// Said before a delete the Recycle Bin cannot undo. A restore point is not a backup of the deleted files, and Windows
+// makes at most one a day (none with System Restore off), so the page never promises one.
+const RP_NOTE = 'Shimmy also asks Windows for a restore point, which Windows makes at most once a day; it brings back Windows settings and programs, not deleted files.';
+
 // What happened to the restore point Shimmy asks for before a delete the Recycle Bin cannot undo.
 const restoreNote = (r) => !r.restorePoint ? ''
   : ' ' + r.restorePoint + (r.restorePoint.startsWith('Windows made') ? ' Files on C: can often be got back from it: right-click the folder they were in, then Restore previous versions.' : '');
@@ -571,7 +575,7 @@ async function previewDelete(path) {
   const binNote = 'Goes to the Recycle Bin: you can restore it, and the space is freed once the bin is emptied.';
   $('#modalBody').innerHTML = `<h3>Delete ${esc(name)}?</h3><div class="muted">${esc(path)}</div>
     <div class="plist"><div><span>Size</span><span>${fmtB(c.bytes)}</span></div><div><span>Files</span><span>${c.files.toLocaleString()}</span></div><div><span>Folders inside</span><span>${c.folders.toLocaleString()}</span></div></div>
-    ${fits ? '' : `<div class="warn-box">This is bigger than your Recycle Bin (${fmtB(r.binCapacity)}), so Windows can only delete it for good. Shimmy asks Windows for a restore point first.</div>`}
+    ${fits ? '' : `<div class="warn-box">This is bigger than your Recycle Bin (${fmtB(r.binCapacity)}), so Windows can only delete it for good. ${RP_NOTE}</div>`}
     <label class="perm"><input type="checkbox" class="tick" id="mPerm" ${fits ? '' : 'checked disabled'}>Delete for good and free ${fmtB(c.bytes)} now (no undo)</label>
     <div class="muted" id="mNote">${fits ? binNote : 'It cannot be restored afterwards.'}</div>
     <div class="modal-actions"><button class="btn ghost" id="mCancel">Cancel</button><button class="btn danger" id="mOk">${fits ? 'Move to Recycle Bin' : 'Delete for good'}</button></div>`;
@@ -579,7 +583,7 @@ async function previewDelete(path) {
   $('#mPerm').onchange = () => {
     const perm = $('#mPerm').checked;
     $('#mOk').textContent = perm ? 'Delete for good' : 'Move to Recycle Bin';
-    $('#mNote').textContent = perm ? 'Deleted straight away, after Shimmy asks Windows for a restore point. It cannot be restored from the Recycle Bin.' : binNote;
+    $('#mNote').textContent = perm ? `Deleted straight away. It cannot be restored from the Recycle Bin. ${RP_NOTE}` : binNote;
   };
   $('#mOk').onclick = async () => {
     $('#mOk').disabled = true; $('#mOk').textContent = 'Working';
@@ -805,7 +809,7 @@ async function doDelete(paths, allowPermanent) {
       const big = r.needsConfirm;
       const fits = paths.filter((p) => !big.some((b) => b.path === p));
       $('#modalBody').innerHTML = `<h3>${big.length} file${big.length === 1 ? ' is' : 's are'} too big for the Recycle Bin</h3>
-        <div class="warn-box">Windows would delete ${big.length === 1 ? 'it' : 'them'} <b>permanently</b>, with no way to restore from the Recycle Bin. Shimmy asks Windows for a restore point first.</div>
+        <div class="warn-box">Windows would delete ${big.length === 1 ? 'it' : 'them'} <b>permanently</b>, with no way to restore from the Recycle Bin. ${RP_NOTE}</div>
         <div class="plist">${big.map((b) => `<div><span>${esc(b.path.split('\\').pop())}</span><span>${fmtB(b.bytes)}</span></div>`).join('')}</div>
         <div class="modal-actions"><button class="btn ghost" id="mSkip">${fits.length ? 'Skip these, recycle the rest' : 'Cancel'}</button><button class="btn danger" id="mOk">Delete permanently</button></div>`;
       $('#mSkip').onclick = () => (fits.length ? doDelete(fits, false) : $('#modal').close());
@@ -1641,16 +1645,21 @@ function confirmAppUpdate(id) {
 }
 
 function confirmUninstall(key, name) {
+  // Per-user apps are listed in a part of the registry any program can write, so Shimmy (running as administrator)
+  // does not start their uninstaller; Windows' Installed apps page does it with your own rights.
+  const mine = key.startsWith('HKCU\\');
   $('#modalBody').innerHTML = `<h3>Uninstall ${esc(name)}?</h3>
-    <div class="muted">Shimmy starts ${esc(name)}’s own uninstaller. It may ask you questions in its own window, and nothing is removed until you go through it there.</div>
-    <div class="modal-actions"><button class="btn ghost" id="mCancel">Cancel</button><button class="btn danger" id="mOk">Start its uninstaller</button></div>`;
+    <div class="muted">${mine
+      ? `${esc(name)} was installed just for you, so Shimmy does not start its uninstaller as administrator. It opens Windows’ Installed apps page, where you can remove it.`
+      : `Shimmy starts ${esc(name)}’s own uninstaller. It may ask you questions in its own window, and nothing is removed until you go through it there.`}</div>
+    <div class="modal-actions"><button class="btn ghost" id="mCancel">Cancel</button><button class="btn danger" id="mOk">${mine ? 'Open Installed apps' : 'Start its uninstaller'}</button></div>`;
   $('#modal').showModal();
   $('#mCancel').onclick = () => $('#modal').close();
   $('#mOk').onclick = async () => {
     $('#modal').close();
     try {
       const r = await api('/api/programs/uninstall', { key });
-      toast(`Started ${r.name}’s uninstaller. The list updates when it has finished.`);
+      toast(r.settings ? `Opened Installed apps. Find ${r.name} there.` : `Started ${r.name}’s uninstaller. The list updates when it has finished.`);
       progSoon(20000);
     } catch (e) { toast(e.message, true); }
   };

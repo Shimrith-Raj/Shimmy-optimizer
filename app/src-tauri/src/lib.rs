@@ -1289,14 +1289,30 @@ fn start_app_update(s: State<'_, Shr>, id: String) -> Result<bool, String> {
   }))
 }
 
-/// Starts an installed app's own uninstaller, read from the registry for this key. One at a time; its own window asks
+/// Windows' Installed apps page. Handed to File Explorer, which passes it to the user's own shell, so Settings runs with
+/// the user's rights and not Shimmy's.
+fn open_installed_apps() -> Result<(), String> {
+  let explorer = clean::known("SystemRoot").ok_or("Windows did not name its folder.")?.join("explorer.exe");
+  std::process::Command::new(explorer).arg("ms-settings:appsfeatures").spawn().map(drop).map_err(|e| format!("Could not open Installed apps: {e}"))
+}
+
+/// Starts an installed app's own uninstaller, read from the registry for this key. Apps installed just for this user
+/// open Windows' Installed apps page instead (programs::per_user). One at a time; its own window asks
 /// the rest, and Shimmy does not wait for it.
 #[tauri::command]
 async fn uninstall_app(s: State<'_, Shr>, key: String) -> Result<Value, String> {
   use std::os::windows::process::CommandExt;
   let s = s.inner().clone();
   tauri::async_runtime::spawn_blocking(move || {
-    if uninstaller_open(&s) {
+    if programs::per_user(&key) {
+      let name = programs::name_of(&key)?;
+      open_installed_apps()?;
+      s.store.log("uninstall", &name, "installed just for this user: opened Windows' Installed apps page");
+      return Ok(json!({ "name": name, "settings": true }));
+    }
+    // Held from the check to the start, so two quick clicks cannot start two uninstallers.
+    let mut slot = s.uninstaller.lock().unwrap();
+    if slot.as_mut().is_some_and(|c| matches!(c.try_wait(), Ok(None))) {
       return Err("Another uninstaller is still open. Finish that one first.".to_string());
     }
     let (name, exe, args) = programs::uninstall_command(&key)?;
@@ -1305,7 +1321,8 @@ async fn uninstall_app(s: State<'_, Shr>, key: String) -> Result<Value, String> 
       cmd.raw_arg(&args);
     }
     let child = cmd.spawn().map_err(|e| format!("Windows could not start its uninstaller: {e}"))?;
-    *s.uninstaller.lock().unwrap() = Some(child);
+    *slot = Some(child);
+    drop(slot);
     s.store.log("uninstall", &name, &format!("started its own uninstaller: {exe} {args}"));
     Ok(json!({ "name": name }))
   })
@@ -1335,14 +1352,15 @@ async fn set_priority(s: State<'_, Shr>, exes: Vec<String>, level: String) -> Re
     }
     {
       let mut st = s.settings.lock().unwrap();
+      // Checked before anything changes, so a refused request leaves the list as it was.
+      if level.is_some() && st.priorities.len() + keys.iter().filter(|k| !st.priorities.contains_key(*k)).count() > 100 {
+        return Err("Up to 100 apps can have a background priority.".into());
+      }
       for k in &keys {
         match level {
           Some(l) => st.priorities.insert(k.clone(), l),
           None => st.priorities.remove(k),
         };
-      }
-      if st.priorities.len() > 100 {
-        return Err("Up to 100 apps can have a background priority.".into());
       }
     }
     s.save_settings();
@@ -1367,14 +1385,15 @@ fn prio_watch(s: &Shared) {
   let procs_now = system::list_procs(&mut s.sys.lock().unwrap());
   let own = system::own_pids(&procs_now);
   let running: Vec<(u32, String)> = procs_now.iter().filter(|p| !classify(p, &own, &Marks::new()).builtin).map(|p| (p.pid, p.name.to_lowercase())).collect();
-  // Exited processes are forgotten, so a reused process id is never "put back".
-  applied.retain(|pid, _| running.iter().any(|(p, _)| p == pid));
+  // Exited processes are forgotten. Windows reuses process ids, so an entry is kept only while the same id still runs
+  // the same exe: another app that got the id is then neither skipped nor "put back".
+  applied.retain(|pid, a| running.iter().any(|(p, exe)| p == pid && *exe == a.0));
   let (set, back) = prio::plan(&running, &wanted, &applied);
   let (mut lowered, mut restored): (BTreeMap<String, usize>, BTreeMap<String, usize>) = Default::default();
   for (pid, level) in set {
     let exe = running.iter().find(|r| r.0 == pid).map(|r| r.1.clone()).unwrap_or_default();
     if let Ok(prev) = prio::apply(pid, level) {
-      let orig = applied.get(&pid).map_or(prev, |a| a.1);
+      let orig = applied.get(&pid).map_or(prio::original(prev), |a| a.1);
       applied.insert(pid, (exe.clone(), orig, level));
       *lowered.entry(exe).or_default() += 1;
     }
@@ -1400,7 +1419,10 @@ fn restore_priorities(s: &Shared) {
   if applied.is_empty() {
     return;
   }
-  let back = applied.iter().filter(|(pid, (_, old, _))| prio::revert(*pid, *old)).count();
+  // Only a process that still runs the same exe: its id may have gone to another app since the last 30 s check.
+  let procs_now = system::list_procs(&mut s.sys.lock().unwrap());
+  let same = |pid: u32, exe: &str| procs_now.iter().any(|p| p.pid == pid && p.name.eq_ignore_ascii_case(exe));
+  let back = applied.iter().filter(|(pid, (exe, old, _))| same(*pid, exe) && prio::revert(*pid, *old)).count();
   s.store.log("priority-restored", "all", &format!("{back} of {} processes put back: Shimmy exited", applied.len()));
 }
 
@@ -1436,7 +1458,7 @@ async fn export_csv(app: AppHandle, s: State<'_, Shr>, what: String, path: Optio
   let s = s.inner().clone();
   let dir = app.path().download_dir().map_err(|e| e.to_string())?;
   tauri::async_runtime::spawn_blocking(move || {
-    let row = store::csv_row;
+    let row = store::export_row;
     let (label, body) = match what.as_str() {
       "finder" => {
         let j = s.finder.lock().unwrap();
@@ -1463,7 +1485,7 @@ async fn export_csv(app: AppHandle, s: State<'_, Shr>, what: String, path: Optio
         }
         ("biggest folders", b)
       }
-      "log" => ("log", std::fs::read_to_string(s.store.log_file()).map_err(|_| "Nothing has been logged yet.")?),
+      "log" => ("log", s.store.export_log().ok_or("Nothing has been logged yet.")?),
       _ => return Err("Shimmy does not know that export.".to_string()),
     };
     let name = format!("Shimmy {label} {}.csv", local_stamp());
@@ -1512,17 +1534,34 @@ fn check_root(p: &Path) -> Result<(), String> {
   Ok(())
 }
 
+/// Every range and gate on settings, for the page's copy and for settings.json at start-up alike: the file is in the
+/// user's own folder, so any program could have edited it, and Shimmy acts on it as administrator (a charge limit written
+/// to the firmware, a plan GUID passed to powercfg, folders the finder searches). Out-of-range values are pulled back
+/// into range; finder folders that fail `check_root` and an unreadable saved plan are dropped.
+fn sanitize(st: &mut Settings) {
+  auto::clamp(&mut st.alerts, &mut st.auto_clean, &mut st.weekly, &mut st.finder, &mut st.updates);
+  st.caches.age_days = st.caches.age_days.clamp(1, 365);
+  power::clamp(&mut st.power);
+  st.finder.extra_roots.retain(|r| check_root(Path::new(r)).is_ok());
+  st.charge_limit = st.charge_limit.filter(|p| (50..=100).contains(p));
+  if st.plugged.on {
+    st.plugged.hold_pct = st.plugged.hold_pct.clamp(hold::FLOOR, 100);
+  }
+  if st.heat.saved.as_ref().is_some_and(|b| !heat::valid_scheme(&b.scheme)) {
+    st.heat.saved = None;
+  }
+}
+
 #[tauri::command]
 async fn set_settings(s: State<'_, Shr>, settings: Value) -> Result<Value, String> {
   let s = s.inner().clone();
   tauri::async_runtime::spawn_blocking(move || {
     let mut new: Settings = serde_json::from_value(settings).map_err(|e| format!("Settings not understood: {e}"))?;
-    auto::clamp(&mut new.alerts, &mut new.auto_clean, &mut new.weekly, &mut new.finder, &mut new.updates);
-    new.caches.age_days = new.caches.age_days.clamp(1, 365);
-    power::clamp(&mut new.power);
+    // A folder the user just added is refused out loud; `sanitize` drops bad ones silently.
     for r in &new.finder.extra_roots {
-      check_root(Path::new(r))?;
+      check_root(Path::new(r.trim()))?;
     }
+    sanitize(&mut new);
     let (follow_was, follow_now, modes_changed) = {
       let mut cur = s.settings.lock().unwrap();
       let p = (cur.power.follow, new.power.follow, cur.power.plugged != new.power.plugged || cur.power.battery != new.power.battery);
@@ -1936,7 +1975,8 @@ fn automation(app: &AppHandle, s: &Shr, tick: u64) {
     let (app, s, gb) = (app.clone(), s.clone(), st.alerts.junk_gb);
     std::thread::spawn(move || {
       let cats = clean::scan(&s.running(), &jobs::Progress::new(|_| {}));
-      let bytes: u64 = cats.iter().filter(|c| c.default_on).map(|c| c.bytes).sum();
+      // Only what Clean would really clean now: a cache whose app is open is skipped there, so it is not counted here.
+      let bytes: u64 = cats.iter().filter(|c| c.default_on && c.blocked.is_none()).map(|c| c.bytes).sum();
       if s.watch.lock().unwrap().junk.step(auto::junk_over(bytes, gb), store::now_ms(), 0, 24 * 60 * MIN) {
         alert(&app, &s, "Junk to clean", &format!("{} of temporary files and caches can be cleaned. The Clean page shows what, and cleans it when you say.", fmt_mb((bytes / 1_048_576) as i64)));
       }
@@ -2010,7 +2050,8 @@ pub fn run() {
     .setup(|app| {
       let dir = app.path().app_data_dir()?;
       let settings_path = dir.join("settings.json");
-      let settings: Settings = std::fs::read_to_string(&settings_path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+      let mut settings: Settings = std::fs::read_to_string(&settings_path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+      sanitize(&mut settings);
       let store = Store::open(dir);
       if let Ok(desktop) = app.path().desktop_dir() {
         if let Some(what) = store.import_old(&desktop.join("RAM Optimizer").join("data")) {
@@ -2105,4 +2146,32 @@ pub fn run() {
         api.prevent_exit();
       }
     });
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn settings_from_the_file_are_checked_like_the_page() {
+    let mut st: Settings = serde_json::from_value(json!({
+      "chargeLimit": 20,
+      "plugged": { "on": true, "holdPct": 5 },
+      "heat": { "saved": { "scheme": "/hibernate off", "ac": 2, "dc": 1, "since": 0 } },
+      "finder": { "extraRoots": [r"C:\Windows", r"C:\"] },
+      "weekly": { "day": 40, "cats": ["recycle", "nonsense"] },
+      "power": { "plugged": "turbo" },
+    }))
+    .unwrap();
+    sanitize(&mut st);
+    assert_eq!(st.charge_limit, None, "never written to the firmware out of range");
+    assert_eq!(st.plugged.hold_pct, hold::FLOOR);
+    assert!(st.heat.saved.is_none(), "not a plan GUID, so never passed to powercfg");
+    assert!(st.finder.extra_roots.is_empty(), "Windows and the whole of C: are not searched");
+    assert_eq!((st.weekly.day, st.weekly.cats.clone()), (6, vec!["recycle".to_string()]));
+    assert_eq!(st.power.plugged, "performance");
+    let mut off = Settings::default();
+    sanitize(&mut off);
+    assert_eq!(off.plugged.hold_pct, 0, "an unused hold level is left alone");
+  }
 }

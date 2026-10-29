@@ -28,7 +28,7 @@ struct Def {
   default_on: bool,
   /// Lower-case process names; while one runs, the cache is skipped.
   procs: &'static [&'static str],
-  /// (base environment variable, relative folder)
+  /// (base folder, by the environment variable that usually names it: `clean::known`; relative folder)
   dirs: &'static [(&'static str, &'static str)],
 }
 
@@ -62,7 +62,7 @@ pub fn is_cache(id: &str) -> bool {
 }
 
 fn dirs(d: &Def) -> Vec<PathBuf> {
-  d.dirs.iter().filter_map(|(var, rel)| std::env::var_os(var).map(|b| PathBuf::from(b).join(rel))).filter(|p| p.is_dir()).collect()
+  d.dirs.iter().filter_map(|(var, rel)| crate::clean::known(var).map(|b| b.join(rel))).filter(|p| p.is_dir()).collect()
 }
 
 fn blocked(d: &Def, running: &HashSet<String>) -> Option<String> {
