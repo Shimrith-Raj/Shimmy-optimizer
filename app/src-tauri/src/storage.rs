@@ -302,6 +302,10 @@ pub fn check_folder(path: &Path, profile: &Path, rules: &crate::finder::Rules) -
   if !md.is_dir() || md.file_type().is_symlink() {
     return Err("not a regular folder".into());
   }
+  // The rules here read the path's text, so a folder on the way that is really a link must not get past them.
+  if !crate::store::really_at(profile, path) {
+    return Err("the path leads somewhere else".into());
+  }
   if md.file_attributes() & HIDDEN_OR_SYSTEM != 0 {
     return Err("a hidden or system folder".into());
   }
@@ -329,6 +333,11 @@ pub fn check_folder(path: &Path, profile: &Path, rules: &crate::finder::Rules) -
         return Err(format!("holds something on your exclusions list ({name})"));
       }
       let Ok(ft) = entry.file_type() else { continue };
+      // Windows' own notes about the folder go with it; any other hidden or system item is a reason to stop and look.
+      let folder_note = name.eq_ignore_ascii_case("desktop.ini") || name.eq_ignore_ascii_case("thumbs.db");
+      if !folder_note && entry.metadata().is_ok_and(|m| m.file_attributes() & HIDDEN_OR_SYSTEM != 0) {
+        return Err(format!("holds a hidden or system item ({name})"));
+      }
       if ft.is_dir() && !ft.is_symlink() {
         if is_project(&p) {
           return Err(format!("holds a code project ({name})"));
@@ -400,6 +409,22 @@ mod tests {
     assert_eq!(check_folder(&appdata, &profile, &r).unwrap_err(), "app data; use Old caches for that");
     assert_eq!(check_folder(&old, &profile, &Rules::new(500, &["OLD STUFF".into()])).unwrap_err(), "on your exclusions list");
     assert!(check_folder(Path::new(r"C:\Windows\System32"), &profile, &r).is_err());
+
+    // Windows' notes about a folder go with it; anything else hidden stops the delete.
+    let notes = mk(r"Pictures\trip");
+    let hide = |p: &Path| assert!(std::process::Command::new("attrib").arg("+h").arg(p).status().unwrap().success());
+    fs::write(notes.join("desktop.ini"), b"x").unwrap();
+    hide(&notes.join("desktop.ini"));
+    assert!(check_folder(&notes, &profile, &r).is_ok());
+    fs::write(notes.join("secret.dat"), b"x").unwrap();
+    hide(&notes.join("secret.dat"));
+    assert_eq!(check_folder(&notes, &profile, &r).unwrap_err(), "holds a hidden or system item (secret.dat)");
+
+    // A folder on the way that is really a link is refused, even though its name looks fine.
+    let link = profile.join(r"Documents\link");
+    assert!(std::process::Command::new("cmd").args(["/c", "mklink", "/J"]).arg(&link).arg(profile.join("AppData")).stdout(std::process::Stdio::null()).status().unwrap().success());
+    assert_eq!(check_folder(&link.join(r"Local\Thing"), &profile, &r).unwrap_err(), "the path leads somewhere else");
+    let _ = fs::remove_dir(&link);
 
     let mut t = Tree::default();
     let dl = profile.join("Downloads");

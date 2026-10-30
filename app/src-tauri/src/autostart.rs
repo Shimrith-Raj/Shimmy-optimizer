@@ -71,11 +71,19 @@ pub fn task_xml(exe: &Path, user: &str) -> String {
   )
 }
 
+/// The task starts Shimmy elevated with no prompt, so its exe must be where only administrators can change it.
+fn installed(exe: &std::path::Path, program_files: Option<&std::path::Path>) -> bool {
+  program_files.is_some_and(|pf| exe.starts_with(pf))
+}
+
 pub fn set(on: bool) -> Result<(), String> {
   if !on {
     return if enabled() { with_root(|root| unsafe { root.DeleteTask(&BSTR::from(TASK), 0) }) } else { Ok(()) };
   }
   let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+  if !installed(&exe, crate::clean::known("ProgramFiles").as_deref()) {
+    return Err("Start with Windows only works for the installed Shimmy in Program Files. This copy is somewhere other programs could replace it, and it would then start as administrator with no prompt.".into());
+  }
   let user = match (std::env::var("USERDOMAIN"), std::env::var("USERNAME")) {
     (Ok(d), Ok(u)) => format!("{d}\\{u}"),
     (_, Ok(u)) => u,
@@ -90,6 +98,16 @@ pub fn set(on: bool) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+  #[test]
+  fn only_an_installed_copy_starts_with_windows() {
+    use std::path::Path;
+    let pf = Some(Path::new(r"C:\Program Files"));
+    assert!(super::installed(Path::new(r"C:\Program Files\Shimmy Optimizer\shimmy-optimizer.exe"), pf));
+    assert!(!super::installed(Path::new(r"C:\Users\x\Downloads\shimmy-optimizer.exe"), pf));
+    assert!(!super::installed(Path::new(r"C:\Program Files Evil\shimmy-optimizer.exe"), pf));
+    assert!(!super::installed(Path::new(r"C:\Program Files\Shimmy Optimizer\shimmy-optimizer.exe"), None));
+  }
+
   #[test]
   fn task_xml_runs_on_battery_elevated() {
     let x = super::task_xml(std::path::Path::new(r"C:\Program Files\Shimmy Optimizer\shimmy-optimizer.exe"), r"PC\Studio & Co");

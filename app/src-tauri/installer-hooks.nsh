@@ -27,4 +27,7 @@ VIAddVersionKey "CompanyName" "Shimrith Raj"
 
 !macro NSIS_HOOK_PREUNINSTALL
   ExecWait '"$INSTDIR\${MAINBINARYNAME}.exe" --autostart off'
+  ; Nothing manages the charge limit once Shimmy is gone, so one it set must not keep the battery capped. An update
+  ; passes through here too; the new version writes the limit again as it starts.
+  ExecWait '"$INSTDIR\${MAINBINARYNAME}.exe" --reset-limit'
 !macroend

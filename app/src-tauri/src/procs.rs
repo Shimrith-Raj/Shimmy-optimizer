@@ -187,7 +187,9 @@ static SYSTEM: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
   .into_iter()
   .collect()
 });
-const SHELLS: [&str; 7] = ["powershell.exe", "pwsh.exe", "cmd.exe", "windowsterminal.exe", "openconsole.exe", "bash.exe", "wsl.exe"];
+const SHELLS: [&str; 13] = ["powershell.exe", "pwsh.exe", "cmd.exe", "windowsterminal.exe", "openconsole.exe", "bash.exe", "wsl.exe", "wt.exe", "mintty.exe", "git-bash.exe", "alacritty.exe", "wezterm-gui.exe", "conemu64.exe"];
+/// Code and text editors, by exact name: "code" alone would match far too much. Their unsaved work is why they stay open.
+const CODE_EDITORS: [&str; 11] = ["code.exe", "code - insiders.exe", "cursor.exe", "windsurf.exe", "devenv.exe", "idea64.exe", "pycharm64.exe", "sublime_text.exe", "notepad++.exe", "notepad.exe", "zed.exe"];
 static EDITORS: LazyLock<Regex> = LazyLock::new(|| {
   Regex::new(r"(?i)premiere|afterfx|after effects|capcut|resolve|photoshop|illustrator|audition|media ?encoder|vegas|blender|obs64|obs32|davinci|lightroom|indesign").unwrap()
 });
@@ -266,7 +268,7 @@ pub fn classify(p: &Proc, own: &HashSet<u32>, marks: &Marks) -> Classified {
     Some("Terminal / shell")
   } else if n.starts_with("claude") || RE_CLAUDE_CODE.is_match(&p.cmd) {
     Some("Claude")
-  } else if EDITORS.is_match(&format!("{n} {}", p.path)) {
+  } else if EDITORS.is_match(&format!("{n} {}", p.path)) || CODE_EDITORS.contains(&n.as_str()) {
     Some("Editing app")
   } else if CLIENT_WORK.is_match(&format!("{} {}", p.cmd, p.path)) {
     Some("Salon Shaila work")
@@ -588,6 +590,18 @@ mod tests {
     }
     let c = classify(&proc(21, "discord.exe", ""), &HashSet::new(), &marks(&[("discord.exe", Mark::Safe)]));
     assert!(!c.protected);
+  }
+
+  #[test]
+  fn code_editors_and_every_terminal_are_protected() {
+    for name in ["Code.exe", "cursor.exe", "notepad++.exe", "devenv.exe"] {
+      assert_eq!(classify(&proc(40, name, ""), &HashSet::new(), &Marks::new()).reason.as_deref(), Some("Editing app"), "{name}");
+      assert!(builtin_reason(name).is_some(), "{name} cannot be marked Safe");
+    }
+    for name in ["mintty.exe", "wt.exe", "alacritty.exe"] {
+      assert_eq!(classify(&proc(41, name, ""), &HashSet::new(), &Marks::new()).reason.as_deref(), Some("Terminal / shell"), "{name}");
+    }
+    assert!(!classify(&proc(42, "encoder.exe", ""), &HashSet::new(), &Marks::new()).protected, "only exact names");
   }
 
   #[test]

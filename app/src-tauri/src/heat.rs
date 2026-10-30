@@ -3,8 +3,7 @@
 //! for about 0.5 % less average clock (PLAN.md, Phase 9). The decisions are pure functions; lib.rs feeds them the
 //! temperature every 3 s and carries out what they return.
 use serde::{Deserialize, Serialize};
-use std::os::windows::process::CommandExt;
-use std::process::Command;
+use std::time::Duration;
 
 /// Boost goes off after this long at or above `HOT_C`.
 pub const HOT_C: f64 = 90.0;
@@ -12,7 +11,7 @@ const HOT_MS: u64 = 30_000;
 /// Boost comes back after this long at or below `COOL_C`.
 pub const COOL_C: f64 = 75.0;
 const COOL_MS: u64 = 2 * 60_000;
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+const POWERCFG_LIMIT: Duration = Duration::from_secs(20);
 
 /// Windows' boost mode values for a power plan, saved before Shimmy turns boost off so they can be put back exactly.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
@@ -88,7 +87,8 @@ impl Watch {
 }
 
 fn powercfg(args: &[&str]) -> Result<String, String> {
-  let out = Command::new("powercfg.exe").args(args).creation_flags(CREATE_NO_WINDOW).output().map_err(|e| e.to_string())?;
+  // This runs inside the 3 s tick, so a stuck powercfg must not stop everything else for good.
+  let out = crate::clean::hidden_for("powercfg.exe", args, POWERCFG_LIMIT).map_err(|e| e.to_string())?;
   if !out.status.success() {
     return Err(format!("powercfg {} failed: {}", args.join(" "), String::from_utf8_lossy(&out.stdout).trim()));
   }
@@ -129,17 +129,18 @@ fn set_boost(scheme: &str, ac: u32, dc: u32) -> Result<(), String> {
   Ok(())
 }
 
-/// Turns boost off on the active plan and returns what to put back later.
-pub fn boost_off(now: u64) -> Result<SavedBoost, String> {
+/// What to put back later: the active plan's boost values as they are now. Saved before `boost_off` changes anything.
+pub fn read_boost(now: u64) -> Result<SavedBoost, String> {
   let scheme = active_scheme(&powercfg(&["/getactivescheme"])?).ok_or("Windows did not name its power plan.")?;
   let (ac, dc) = boost_values(&powercfg(&["/qh", &scheme, "SUB_PROCESSOR", "PERFBOOSTMODE"])?).ok_or("Windows did not report the boost setting.")?;
-  // If a later step fails after the AC value was written, the old values go back at once: nothing is saved to restore
-  // them from otherwise.
-  if let Err(e) = set_boost(&scheme, 0, 0) {
-    let _ = set_boost(&scheme, ac, dc);
-    return Err(e);
-  }
   Ok(SavedBoost { scheme, ac, dc, since: now })
+}
+
+/// Turns boost off on that plan. If a later step fails after the AC value was written, the old values go back at once.
+pub fn boost_off(saved: &SavedBoost) -> Result<(), String> {
+  set_boost(&saved.scheme, 0, 0).inspect_err(|_| {
+    let _ = set_boost(&saved.scheme, saved.ac, saved.dc);
+  })
 }
 
 /// Puts back the values saved when boost went off, on the plan they came from.
