@@ -138,7 +138,13 @@ changes to `lib.rs`, `app.js` and `PLAN.md`.
   about 15 s from the command line, because it reads the inventory and starts its own sensor reader. It prints to a redirect,
   a pipe or the terminal that started it. A windowed program does not hold the prompt, so the prompt comes back first and
   the report follows. With nowhere to print, it saves to Downloads and shows the file.
-- **Not yet run elevated:** temperatures and package power in the log and report. From a non-elevated terminal the installed
+- **Security sweep (2026-10-30, Cloudflare's security-audit skill, focused review of P3):** PowerShell now runs only
+  through `clean::powershell` (module auto-loading off, modules by full path), because it looked in the user's Documents
+  first, so a planted module would have run as administrator. Data moved from `%APPDATA%` to an admins-only folder
+  (`data_dir`), and files in Downloads go through `store::create_new`, so a planted link cannot make Shimmy overwrite a
+  system file. Connections counts leave out closing sockets, a copied Windows exe name loses the Windows label, and
+  loopback-only ports say so. The fake-module attack was rerun with the fix and no longer runs.
+- **Not yet run elevated:** the move to the protected folder, and temperatures and package power in the log and report. From a non-elevated terminal the installed
   build asks for elevation and has no console to borrow, so that path should save to Downloads: check it on first real use.
 
 ## Risks

@@ -1,7 +1,7 @@
 //! Connections page: which app holds which connection, from Windows' own TCP and UDP tables. Read only, with no driver
 //! and no firewall changes. Addresses are never looked up, so this page makes no network use of its own.
 use serde::Serialize;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use windows::Win32::NetworkManagement::IpHelper::{
   GetExtendedTcpTable, GetExtendedUdpTable, MIB_TCP6ROW_OWNER_PID, MIB_TCPROW_OWNER_PID, MIB_UDP6ROW_OWNER_PID, MIB_UDPROW_OWNER_PID, TCP_TABLE_OWNER_PID_ALL, UDP_TABLE_OWNER_PID,
@@ -31,6 +31,7 @@ pub struct Conn {
   /// None for a port that only waits (listening TCP, and all UDP, which has no connections).
   pub remote: Option<String>,
   pub remote_port: Option<u16>,
+  /// Where the far end is. For a port that only waits: This PC when only this PC can reach it, otherwise None.
   pub place: Option<Place>,
   pub state: &'static str,
 }
@@ -71,7 +72,11 @@ pub fn place(ip: IpAddr) -> Place {
 }
 
 fn conn(proto: &'static str, pid: u32, local: IpAddr, local_port: u16, remote: Option<(IpAddr, u16)>, state: &'static str) -> Conn {
-  Conn { proto, pid, local: local.to_string(), local_port, remote: remote.map(|r| r.0.to_string()), remote_port: remote.map(|r| r.1), place: remote.map(|r| place(r.0)), state }
+  let at = match remote {
+    Some(r) => Some(place(r.0)),
+    None => (place(local) == Place::ThisPc && !local.is_unspecified()).then_some(Place::ThisPc),
+  };
+  Conn { proto, pid, local: local.to_string(), local_port, remote: remote.map(|r| r.0.to_string()), remote_port: remote.map(|r| r.1), place: at, state }
 }
 
 /// A TCP row's far end: a listening socket has none, only the empty address.
@@ -143,26 +148,48 @@ pub struct AppConns {
   pub local: usize,
   pub this_pc: usize,
   pub waiting: usize,
+  /// Sockets on their way out, counted nowhere else.
+  pub closing: usize,
+  /// The programs behind this name: a name alone proves nothing.
+  pub paths: BTreeSet<String>,
   pub conns: Vec<Conn>,
 }
 
+/// Who holds a socket.
+pub struct Owner {
+  pub app: String,
+  pub path: String,
+}
+
+/// The name to show. Windows' own processes are recognised by exe name, which any program can copy, so one that runs from
+/// outside the Windows folder goes by its plain exe name. Windows hides a few real ones' paths: those have none here.
+pub fn label(app: String, exe: &str, path: &str, windows: &str) -> String {
+  let inside = path.to_lowercase().starts_with(&format!("{}\\", windows.trim_end_matches('\\').to_lowercase()));
+  if app.starts_with("Windows ") && !path.is_empty() && !inside { exe.to_string() } else { app }
+}
+
 /// The name for a socket's owner. Windows files sockets that are closing, once their app has gone, under process 0.
-fn owner(pid: u32, names: &HashMap<u32, String>) -> String {
-  match (pid, names.get(&pid)) {
+fn owner(pid: u32, owners: &HashMap<u32, Owner>) -> String {
+  match (pid, owners.get(&pid)) {
     (0, _) => "Closing, app already gone".into(),
     (4, _) => "Windows".into(),
-    (_, Some(n)) => n.clone(),
+    (_, Some(o)) => o.app.clone(),
     _ => format!("Process {pid}"),
   }
 }
 
-/// Sockets by app: apps on the internet first, then the most connections, then by name.
-pub fn by_app(conns: Vec<Conn>, names: &HashMap<u32, String>) -> Vec<AppConns> {
+/// Sockets by app: apps on the internet first, then the most connections, then by name. A closing socket counts only as
+/// closing: its app is not on the internet any more.
+pub fn by_app(conns: Vec<Conn>, owners: &HashMap<u32, Owner>) -> Vec<AppConns> {
   let mut apps: BTreeMap<String, AppConns> = BTreeMap::new();
   for c in conns {
-    let name = owner(c.pid, names);
-    let a = apps.entry(name.to_lowercase()).or_insert_with(|| AppConns { app: name, internet: 0, local: 0, this_pc: 0, waiting: 0, conns: Vec::new() });
+    let name = owner(c.pid, owners);
+    let a = apps.entry(name.to_lowercase()).or_insert_with(|| AppConns { app: name, internet: 0, local: 0, this_pc: 0, waiting: 0, closing: 0, paths: BTreeSet::new(), conns: Vec::new() });
+    if let Some(o) = owners.get(&c.pid).filter(|o| !o.path.is_empty()) {
+      a.paths.insert(o.path.clone());
+    }
     match c.place {
+      _ if c.state == "Closing" => a.closing += 1,
       Some(Place::Internet) => a.internet += 1,
       Some(Place::Local) => a.local += 1,
       Some(Place::ThisPc) => a.this_pc += 1,
@@ -175,6 +202,7 @@ pub fn by_app(conns: Vec<Conn>, names: &HashMap<u32, String>) -> Vec<AppConns> {
   out.sort_by_key(|a| (std::cmp::Reverse(a.internet), std::cmp::Reverse(a.local + a.this_pc)));
   for a in &mut out {
     a.conns.sort_by_key(|c| match c.place {
+      _ if c.state == "Closing" => 4,
       Some(Place::Internet) => 0,
       Some(Place::Local) => 1,
       Some(Place::ThisPc) => 2,
@@ -259,7 +287,8 @@ mod tests {
 
   #[test]
   fn sockets_group_by_app_with_the_internet_first() {
-    let names = HashMap::from([(10, "chrome.exe".to_string()), (11, "Chrome.exe".to_string()), (20, "svchost.exe".to_string()), (30, "alpha.exe".to_string())]);
+    let own = |app: &str, path: &str| Owner { app: app.into(), path: path.into() };
+    let names = HashMap::from([(10, own("chrome.exe", r"C:\a\chrome.exe")), (11, own("Chrome.exe", r"C:\b\chrome.exe")), (20, own("svchost.exe", "")), (30, own("alpha.exe", ""))]);
     let apps = by_app(
       vec![
         sock(20, Some("192.168.1.1")),
@@ -279,5 +308,38 @@ mod tests {
     assert_eq!((chrome.internet, chrome.this_pc, chrome.waiting, chrome.conns.len()), (1, 1, 1, 3), "two processes, one app");
     assert_eq!(chrome.conns[0].place, Some(Place::Internet), "the internet first within an app");
     assert_eq!(chrome.conns[2].place, None, "ports that only wait last");
+    assert_eq!(chrome.paths.len(), 2, "a name can hide two different programs");
+  }
+
+  #[test]
+  fn closing_sockets_are_not_on_the_internet() {
+    let mut gone = sock(10, Some("8.8.8.8"));
+    gone.state = "Closing";
+    let names = HashMap::from([(10, Owner { app: "app".into(), path: String::new() })]);
+    let apps = by_app(vec![gone, sock(10, Some("9.9.9.9"))], &names);
+    assert_eq!((apps[0].internet, apps[0].closing), (1, 1));
+    assert_eq!(apps[0].conns[1].state, "Closing", "closing last");
+  }
+
+  #[test]
+  fn ports_only_this_pc_can_reach_say_so() {
+    let wait = |ip: &str| conn("TCP", 1, ip.parse().unwrap(), 80, None, "Listening").place;
+    assert_eq!(wait("127.0.0.1"), Some(Place::ThisPc));
+    assert_eq!(wait("::1"), Some(Place::ThisPc));
+    assert_eq!(wait("0.0.0.0"), None, "any address");
+    assert_eq!(wait("::"), None, "any address");
+    assert_eq!(wait("192.168.1.5"), None);
+  }
+
+  #[test]
+  fn a_copied_windows_name_does_not_get_the_windows_label() {
+    let at = |app: &str, path: &str| label(app.to_string(), "svchost.exe", path, r"C:\Windows");
+    assert_eq!(at("Windows system", r"C:\Windows\System32\svchost.exe"), "Windows system");
+    assert_eq!(at("Windows system", r"c:\windows\system32\svchost.exe"), "Windows system");
+    assert_eq!(at("Windows system", r"C:\Users\x\AppData\svchost.exe"), "svchost.exe");
+    assert_eq!(at("Windows system", r"C:\WindowsEvil\svchost.exe"), "svchost.exe", "a folder that only starts the same");
+    assert_eq!(at("Windows service", r"C:\Temp\svchost.exe"), "svchost.exe");
+    assert_eq!(at("Windows system", ""), "Windows system", "Windows hides some paths");
+    assert_eq!(at("Chrome", r"C:\Temp\chrome.exe"), "Chrome", "other names are left alone");
   }
 }

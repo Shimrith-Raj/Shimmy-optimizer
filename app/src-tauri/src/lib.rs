@@ -1495,8 +1495,9 @@ fn connections(s: &Shared) -> Result<Vec<net::AppConns>, String> {
   let conns = net::list()?;
   let procs_now = system::list_procs(&mut s.sys.lock().unwrap());
   let own = system::own_pids(&procs_now);
-  let names = procs_now.iter().map(|p| (p.pid, classify(p, &own, &Marks::new()).app)).collect();
-  Ok(net::by_app(conns, &names))
+  let windows = clean::known("SystemRoot").map_or(String::new(), |w| w.display().to_string());
+  let owners = procs_now.iter().map(|p| (p.pid, net::Owner { app: net::label(classify(p, &own, &Marks::new()).app, &p.name, &p.path, &windows), path: p.path.clone() })).collect();
+  Ok(net::by_app(conns, &owners))
 }
 
 /// The Connections page: read only (net.rs).
@@ -1565,8 +1566,9 @@ fn start_sensor_log(app: AppHandle, s: State<'_, Shr>, keys: Vec<String>, interv
     return Ok(false);
   }
   let name = format!("Shimmy sensor log {}.csv", local_stamp());
-  let path = app.path().download_dir().map_err(|e| e.to_string())?.join(&name);
-  let mut file = std::fs::File::create_new(&path).map_err(|e| format!("Could not start a log in Downloads: {e}"))?;
+  let dir = app.path().download_dir().map_err(|e| e.to_string())?;
+  let path = dir.join(&name);
+  let mut file = store::create_new(&dir, &name).map_err(|e| format!("Could not start a log in Downloads: {e}"))?;
   // The byte-order mark makes Excel read the file as UTF-8.
   let head = format!("\u{feff}{}", senselog::header(&keys));
   file.write_all(head.as_bytes()).map_err(|e| format!("Could not start a log in Downloads: {e}"))?;
@@ -1576,12 +1578,14 @@ fn start_sensor_log(app: AppHandle, s: State<'_, Shr>, keys: Vec<String>, interv
   s.sensor_log_stop.store(false, Ordering::SeqCst);
   let s2 = s.inner().clone();
   Ok(jobs::start(&s.sensor_log, move |progress| {
-    let (mut bytes, mut rows, mut due) = (head.len() as u64, 0u64, store::now_ms());
+    // The time since starting, not the clock: setting the clock back must not pause the log.
+    let started = std::time::Instant::now();
+    let (mut bytes, mut rows, mut due) = (head.len() as u64, 0u64, 0u64);
     let why = loop {
       if let Some(why) = senselog::stop_reason(s2.sensor_log_stop.load(Ordering::SeqCst), bytes) {
         break why;
       }
-      let now = store::now_ms();
+      let now = started.elapsed().as_millis() as u64;
       if now >= due {
         let row = senselog::line(&local_clock(), &keys, &s2.log_rows());
         if let Err(e) = file.write_all(row.as_bytes()).and_then(|_| file.flush()) {
@@ -1647,15 +1651,16 @@ async fn export_csv(app: AppHandle, s: State<'_, Shr>, what: String, path: Optio
       }
       "log" => ("log", s.store.export_log().ok_or("Nothing has been logged yet.")?),
       "connections" => {
-        let mut b = row(&["app", "protocol", "state", "where", "local address", "local port", "remote address", "remote port"]);
+        let mut b = row(&["app", "protocol", "state", "where", "local address", "local port", "remote address", "remote port", "programs"]);
         for a in connections(&s)? {
+          let programs = a.paths.iter().map(String::as_str).collect::<Vec<_>>().join("; ");
           for c in &a.conns {
             let place = c.place.map_or("", |p| match p {
               net::Place::ThisPc => "This PC",
               net::Place::Local => "Local network",
               net::Place::Internet => "Internet",
             });
-            b += &row(&[&a.app, c.proto, c.state, place, &c.local, &c.local_port.to_string(), c.remote.as_deref().unwrap_or(""), &c.remote_port.map_or(String::new(), |p| p.to_string())]);
+            b += &row(&[&a.app, c.proto, c.state, place, &c.local, &c.local_port.to_string(), c.remote.as_deref().unwrap_or(""), &c.remote_port.map_or(String::new(), |p| p.to_string()), &programs]);
           }
         }
         ("connections", b)
@@ -1665,7 +1670,7 @@ async fn export_csv(app: AppHandle, s: State<'_, Shr>, what: String, path: Optio
     let name = format!("Shimmy {label} {}.csv", local_stamp());
     let file = dir.join(&name);
     // The byte-order mark makes Excel read the file as UTF-8.
-    std::fs::write(&file, format!("\u{feff}{body}")).map_err(|e| format!("Could not save it to Downloads: {e}"))?;
+    store::write_new(&dir, &name, format!("\u{feff}{body}").as_bytes()).map_err(|e| format!("Could not save it to Downloads: {e}"))?;
     s.store.log("export", &name, &format!("saved to {}", dir.display()));
     let _ = std::process::Command::new("explorer.exe").arg(format!("/select,{}", file.display())).spawn();
     Ok(json!({ "name": name }))
@@ -2218,6 +2223,24 @@ fn start_sampler(app: AppHandle) {
   });
 }
 
+/// Where Shimmy keeps its data. It runs as administrator and writes these files often, so they must not sit in a folder
+/// the user's other programs can write to: a link planted there would make it overwrite any file on the PC. ProgramData
+/// first; Program Files if something got to that folder first, since no standard user can make folders there. Not
+/// elevated (a dev build), there is nothing to protect. The second value says what happened, for the Log.
+fn data_dir(user_dir: PathBuf, id: &str) -> (PathBuf, Option<String>) {
+  if !update::elevated() {
+    return (user_dir, None);
+  }
+  let bases = [clean::known("ProgramData").map(|b| b.join("Shimmy Optimizer")), clean::known("ProgramFiles").map(|b| b.join("Shimmy Optimizer Data"))];
+  for dir in bases.into_iter().flatten().map(|b| b.join(id)) {
+    if update::protected_folder(&dir).is_ok() {
+      let moved = store::move_in(&user_dir, &dir);
+      return (dir.clone(), (moved > 0).then(|| format!("{moved} files moved to {} from {}", dir.display(), user_dir.display())));
+    }
+  }
+  (user_dir, Some("Shimmy could not set up a protected folder, so its data stays in your own folder".into()))
+}
+
 /// `--report`: a one-page summary of this PC (report.rs). Returns the exit code, or None to start normally.
 pub fn report_step() -> Option<i32> {
   std::env::args().any(|a| a == "--report").then(report::cli)
@@ -2237,11 +2260,14 @@ pub fn run() {
     .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
     .plugin(tauri_plugin_notification::init())
     .setup(|app| {
-      let dir = app.path().app_data_dir()?;
+      let (dir, data_note) = data_dir(app.path().app_data_dir()?, &app.config().identifier);
       let settings_path = dir.join("settings.json");
       let mut settings: Settings = std::fs::read_to_string(&settings_path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
       sanitize(&mut settings);
       let store = Store::open(dir);
+      if let Some(note) = data_note {
+        store.log("data-folder", "Shimmy's data", &note);
+      }
       if let Ok(desktop) = app.path().desktop_dir() {
         if let Some(what) = store.import_old(&desktop.join("RAM Optimizer").join("data")) {
           store.log("import", "RAM Optimizer v0.2", &format!("Imported {what}"));

@@ -4,6 +4,8 @@ use regex::Regex;
 use serde::Serialize;
 use std::fs;
 use std::io::Write;
+use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -65,6 +67,62 @@ pub fn export_cell(s: &str) -> String {
 pub fn export_row(fields: &[&str]) -> String {
   let safe: Vec<String> = fields.iter().map(|f| export_cell(f)).collect();
   csv_row(&safe.iter().map(String::as_str).collect::<Vec<_>>())
+}
+
+/// Same file name as asked for. A link in the folder's path can send a new file somewhere else under another name.
+fn same_name(final_path: &str, name: &str) -> bool {
+  final_path.rsplit('\\').next().is_some_and(|n| n.eq_ignore_ascii_case(name))
+}
+
+fn final_path(f: &fs::File) -> Option<String> {
+  use windows::Win32::Foundation::HANDLE;
+  use windows::Win32::Storage::FileSystem::{GetFinalPathNameByHandleW, FILE_NAME_NORMALIZED};
+  let mut buf = vec![0u16; 4096];
+  let n = unsafe { GetFinalPathNameByHandleW(HANDLE(f.as_raw_handle()), &mut buf, FILE_NAME_NORMALIZED) } as usize;
+  (n > 0 && n < buf.len()).then(|| String::from_utf16_lossy(&buf[..n]))
+}
+
+/// A new file in a folder the user can write to, such as Downloads. Shimmy is administrator there, so it never opens
+/// what is already at that name: that could be a link to a system file. Refuses an existing file or link, and removes
+/// and refuses a file that a link in the folder's path sent somewhere else.
+pub fn create_new(dir: &Path, name: &str) -> std::io::Result<fs::File> {
+  use windows::Win32::Foundation::HANDLE;
+  use windows::Win32::Storage::FileSystem::{FileDispositionInfo, SetFileInformationByHandle, FILE_DISPOSITION_INFO};
+  const GENERIC_WRITE: u32 = 0x4000_0000;
+  const DELETE: u32 = 0x0001_0000;
+  const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+  let f = fs::OpenOptions::new().write(true).create_new(true).access_mode(GENERIC_WRITE | DELETE).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT).open(dir.join(name))?;
+  if final_path(&f).is_some_and(|p| same_name(&p, name)) {
+    return Ok(f);
+  }
+  let gone = FILE_DISPOSITION_INFO { DeleteFile: true.into() };
+  unsafe {
+    let _ = SetFileInformationByHandle(HANDLE(f.as_raw_handle()), FileDispositionInfo, &gone as *const _ as *const _, std::mem::size_of_val(&gone) as u32);
+  }
+  Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "that folder leads somewhere else"))
+}
+
+/// `create_new`, then the whole content.
+pub fn write_new(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
+  create_new(dir, name)?.write_all(bytes)
+}
+
+/// A real file of a sensible size, not a link to one: what Shimmy may copy out of a folder the user can write to, as
+/// administrator.
+pub fn plain_file(p: &Path) -> bool {
+  const REPARSE_POINT: u32 = 0x400;
+  const MAX_BYTES: u64 = 256 * 1_048_576;
+  fs::symlink_metadata(p).is_ok_and(|m| m.is_file() && m.file_attributes() & REPARSE_POINT == 0 && m.len() <= MAX_BYTES)
+}
+
+/// Copies Shimmy's data from the user's folder to the protected one, once: only when the new folder holds none of it.
+/// The old copies stay where they are, and are no longer used. Returns how many files came across.
+pub fn move_in(from: &Path, to: &Path) -> usize {
+  const FILES: [&str; 4] = ["settings.json", "history.json", "cpu-history.json", "actions-log.csv"];
+  if FILES.iter().any(|f| to.join(f).exists()) {
+    return 0;
+  }
+  FILES.iter().filter(|f| plain_file(&from.join(f)) && fs::read(from.join(f)).and_then(|b| fs::write(to.join(f), b)).is_ok()).count()
 }
 
 static CSV_FIELD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#""((?:[^"]|"")*)""#).unwrap());
@@ -158,12 +216,12 @@ impl Store {
       return None;
     }
     let mut imported = Vec::new();
-    if let Ok(log) = fs::read_to_string(old_data.join("actions-log.csv")) {
+    if let Some(log) = Some(old_data.join("actions-log.csv")).filter(|p| plain_file(p)).and_then(|p| fs::read_to_string(p).ok()) {
       if fs::write(self.log_file(), log).is_ok() {
         imported.push("action log");
       }
     }
-    if let Some(old) = fs::read_to_string(old_data.join("history.json")).ok().and_then(|s| serde_json::from_str::<Vec<(u64, u64)>>(&s).ok()) {
+    if let Some(old) = Some(old_data.join("history.json")).filter(|p| plain_file(p)).and_then(|p| fs::read_to_string(p).ok()).and_then(|s| serde_json::from_str::<Vec<(u64, u64)>>(&s).ok()) {
       let mut h = self.history.lock().unwrap();
       h.extend(old);
       h.sort_by_key(|p| p.0);
@@ -179,6 +237,56 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
+  use super::*;
+
+  fn scratch(name: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!("shimmy-store-{name}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&d);
+    fs::create_dir_all(&d).unwrap();
+    d
+  }
+
+  #[test]
+  fn new_files_never_open_what_is_already_there() {
+    let d = scratch("new");
+    write_new(&d, "a.txt", b"first").unwrap();
+    assert_eq!(fs::read(d.join("a.txt")).unwrap(), b"first");
+    assert_eq!(write_new(&d, "a.txt", b"second").unwrap_err().kind(), std::io::ErrorKind::AlreadyExists);
+    assert_eq!(fs::read(d.join("a.txt")).unwrap(), b"first", "the old file is untouched");
+    // Making a link needs Developer Mode or administrator; without either, the rest of this test has nothing to try.
+    let victim = d.join("victim.txt");
+    fs::write(&victim, b"precious").unwrap();
+    if std::os::windows::fs::symlink_file(&victim, d.join("link.txt")).is_ok() {
+      assert!(write_new(&d, "link.txt", b"evil").is_err(), "a link at that name");
+      assert_eq!(fs::read(&victim).unwrap(), b"precious");
+      assert!(!plain_file(&d.join("link.txt")), "a link is not a plain file");
+    }
+    let _ = fs::remove_dir_all(&d);
+  }
+
+  #[test]
+  fn a_new_file_must_keep_its_name() {
+    assert!(same_name(r"\\?\C:\Users\x\Downloads\Shimmy Report.txt", "shimmy report.txt"));
+    assert!(!same_name(r"\\?\C:\Windows\System32\evil.dll", "Shimmy report.txt"));
+  }
+
+  #[test]
+  fn data_moves_in_once_and_only_as_plain_files() {
+    let (from, to) = (scratch("from"), scratch("to"));
+    fs::write(from.join("settings.json"), b"{}").unwrap();
+    fs::write(from.join("actions-log.csv"), b"log").unwrap();
+    fs::write(from.join("other.txt"), b"not ours").unwrap();
+    assert_eq!(move_in(&from, &to), 2);
+    assert_eq!(fs::read(to.join("settings.json")).unwrap(), b"{}");
+    assert!(!to.join("other.txt").exists());
+    assert!(from.join("settings.json").exists(), "the old copy stays");
+    fs::write(from.join("settings.json"), b"changed").unwrap();
+    assert_eq!(move_in(&from, &to), 0, "only once");
+    assert_eq!(fs::read(to.join("settings.json")).unwrap(), b"{}");
+    assert!(!plain_file(&from), "a folder is not a plain file");
+    let _ = (fs::remove_dir_all(&from), fs::remove_dir_all(&to));
+  }
+
   #[test]
   fn iso_matches_javascript() {
     assert_eq!(super::iso(1_793_116_881_123), "2026-10-27T16:01:21.123Z");

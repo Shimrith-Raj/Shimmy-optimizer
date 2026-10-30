@@ -239,17 +239,35 @@ fn check_folder(dir: &Path) -> Result<(), String> {
   Ok(())
 }
 
-/// Creates the updates folder if needed and makes sure only administrators can write to it. If that cannot be done,
-/// nothing is downloaded or run.
-fn prepare_dir() -> Result<(), String> {
-  let dir = updates_dir();
-  let why = |e: String| format!("Shimmy could not set up a protected folder for the installer ({e}), so it will not download or run one.");
-  std::fs::create_dir_all(&dir).map_err(|e| why(e.to_string()))?;
+/// Creates a folder if needed and makes sure only administrators can write to it.
+pub fn protected_folder(dir: &Path) -> Result<(), String> {
+  std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
   if let Some(parent) = dir.parent() {
-    check_folder(parent).map_err(why)?;
+    check_folder(parent)?;
   }
-  check_folder(&dir).map_err(why)?;
-  lock_down(&dir).map_err(why)
+  check_folder(dir)?;
+  lock_down(dir)
+}
+
+/// If the updates folder cannot be protected, nothing is downloaded or run.
+fn prepare_dir() -> Result<(), String> {
+  protected_folder(&updates_dir()).map_err(|e| format!("Shimmy could not set up a protected folder for the installer ({e}), so it will not download or run one."))
+}
+
+/// Whether this process really holds administrator rights.
+pub fn elevated() -> bool {
+  use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+  use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+  unsafe {
+    let mut token = windows::Win32::Foundation::HANDLE::default();
+    if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_err() {
+      return false;
+    }
+    let (mut e, mut got) = (TOKEN_ELEVATION::default(), 0u32);
+    let ok = GetTokenInformation(token, TokenElevation, Some(&mut e as *mut _ as *mut _), std::mem::size_of_val(&e) as u32, &mut got).is_ok();
+    let _ = windows::Win32::Foundation::CloseHandle(token);
+    ok && e.TokenIsElevated != 0
+  }
 }
 
 fn parse_release(v: &Value, current: &str) -> Result<Parsed, String> {

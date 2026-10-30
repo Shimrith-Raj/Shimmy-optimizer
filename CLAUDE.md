@@ -60,7 +60,9 @@ Recycle Bin route is `trash::delete_all`, used by `caches.rs`.
   `Folder {path, bytes, filesHere, children}`, capped at 40 children. Folder deletes go through `folder_delete`, gated by
   `storage::check_folder`.
 - **System queries** use no WMI yet. Command-line tools run hidden through `clean::hidden(exe, args)`, or `clean::hidden_for` with a time limit for anything that can hang (winget) (powercfg,
-  vssadmin, dism). Shimmy runs as administrator, so it never runs anything a standard user can plant: winget is run
+  vssadmin, dism). PowerShell runs only through `clean::powershell`, which stops it finding modules by name (it looks in the user's
+  Documents first). New files in a user folder go through `store::create_new` or `store::write_new`, never `fs::write`, which
+  follows a planted link. Shimmy runs as administrator, so it never runs anything a standard user can plant: winget is run
   from its package folder (`programs::winget_exe`, not by name through PATH), and uninstallers only from HKLM (apps
   installed just for the user open Windows' Installed apps page, `programs::per_user`).
 
@@ -68,6 +70,7 @@ Recycle Bin route is `trash::delete_all`, used by `caches.rs`.
   overlay calls), `cool.rs` (cooling check), `programs.rs` (installed apps, winget updates), `prio.rs` (background
   priority), `net.rs` (Connections page), `senselog.rs` (sensor log), `report.rs` (`--report` and Save a report). Restore points: `clean::restore_point` via `Shared::restore_point_first`. CSV: `store::csv_row`, `export_csv`.
   Everything Shimmy changes is put back in `exit_app` (boost, power mode, priorities).
+- **Data folder**: `data_dir` in `lib.rs`; `update::protected_folder` makes it admins-only. Not elevated, it stays in `%APPDATA%`.
 - **Dev testing**: the dev build's settings are real and act on this PC: with `power.follow` on it changes the power mode,
   and killing it does not put that back. On Home, the Clean now button sits at about y 808 to 915 in `shoot.ps1`
   coordinates, and a first click can be lost, so never aim a blind click there.
@@ -88,6 +91,6 @@ and is not the app version.
 
 ## Tests
 
-Run them in `app/src-tauri`: `SHIMMY_NO_ADMIN=1 CARGO_TARGET_DIR=target-dev cargo test`. That is 113 unit tests, plus 2 in
+Run them in `app/src-tauri`: `SHIMMY_NO_ADMIN=1 CARGO_TARGET_DIR=target-dev cargo test`. That is 120 unit tests, plus 2 in
 `tests/parity.rs`. The real-PC checks are `--test real_scan -- --ignored`. Every new gate or decision function gets unit
 tests in the same style.

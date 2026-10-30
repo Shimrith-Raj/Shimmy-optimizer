@@ -193,9 +193,8 @@ pub fn winget_dir_ok(loc: &str, program_files: &str) -> bool {
 /// through the user's PATH, and its usual folder (%LOCALAPPDATA%\Microsoft\WindowsApps) is one the user can write to,
 /// so a planted copy would run as administrator. None when App Installer is not on this PC.
 fn winget_exe() -> Option<std::path::PathBuf> {
-  let ps = crate::clean::known("SystemRoot")?.join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
   let pf = crate::clean::known("ProgramFiles")?;
-  let out = crate::clean::hidden(&ps.to_string_lossy(), &["-NoProfile", "-NonInteractive", "-Command", "(Get-AppxPackage -Name Microsoft.DesktopAppInstaller).InstallLocation"]).ok()?;
+  let out = crate::clean::powershell(&["Appx"], "(Get-AppxPackage -Name Microsoft.DesktopAppInstaller).InstallLocation").ok()?;
   let text = String::from_utf8_lossy(&out.stdout);
   let loc = text.lines().map(str::trim).find(|l| winget_dir_ok(l, &pf.to_string_lossy()))?;
   Some(std::path::Path::new(loc).join("winget.exe")).filter(|p| p.is_file())

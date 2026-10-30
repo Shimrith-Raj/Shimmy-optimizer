@@ -121,6 +121,16 @@ fn real_nvidia() {
   println!("{:#?}", shimmy_lib::gpu::nvidia(&nvml).expect("gpu"));
 }
 
+/// Where PowerShell's modules really came from. Every path printed must be under System32.
+#[test]
+#[ignore]
+fn powershell_modules() {
+  let script = "$env:PSModulePath; (Get-Command Get-PhysicalDisk).Module.Path; (Get-Command Get-CimInstance).Module.Path; (Get-Command Get-AppxPackage).Module.Path; (Get-Command ConvertTo-Json).Module.Path; (Get-AppxPackage -Name Microsoft.DesktopAppInstaller).InstallLocation";
+  let out = clean::powershell(&["Microsoft.PowerShell.Management", "Microsoft.PowerShell.Utility", "CimCmdlets", "Storage", "Appx"], script).expect("powershell");
+  println!("{}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+  assert!(out.status.success());
+}
+
 /// P3 Step 1: Windows' connection tables, to compare with `netstat -ano`.
 #[test]
 #[ignore]

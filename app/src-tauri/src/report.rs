@@ -93,7 +93,7 @@ pub fn text(s: &Snapshot) -> String {
   }
   if let Some(c) = &s.conns {
     let on_net = c.iter().filter(|x| x.place == Some(Place::Internet) && x.state == "Connected").count();
-    let waits = c.iter().filter(|x| x.state == "Listening").count();
+    let waits = c.iter().filter(|x| x.state == "Listening" && x.place.is_none()).count();
     let s_of = |n: usize| if n == 1 { "" } else { "s" };
     add("Network", format!("{on_net} connection{} to the internet, {waits} port{} listening", s_of(on_net), s_of(waits)));
   }
@@ -114,8 +114,9 @@ fn can_print() -> bool {
   use windows::Win32::Storage::FileSystem::{GetFileType, FILE_TYPE_UNKNOWN};
   use windows::Win32::System::Console::{AttachConsole, GetStdHandle, ATTACH_PARENT_PROCESS, STD_OUTPUT_HANDLE};
   unsafe {
-    let redirected = GetStdHandle(STD_OUTPUT_HANDLE).is_ok_and(|h| !h.is_invalid() && !h.0.is_null() && GetFileType(h) != FILE_TYPE_UNKNOWN);
-    redirected || AttachConsole(ATTACH_PARENT_PROCESS).is_ok()
+    let usable = || GetStdHandle(STD_OUTPUT_HANDLE).is_ok_and(|h| !h.is_invalid() && !h.0.is_null() && GetFileType(h) != FILE_TYPE_UNKNOWN);
+    // Writing to a missing handle reports success and goes nowhere, so an attached console must really give one.
+    usable() || (AttachConsole(ATTACH_PARENT_PROCESS).is_ok() && usable())
   }
 }
 
@@ -123,7 +124,7 @@ fn can_print() -> bool {
 pub fn save(dir: &std::path::Path, stamp: &str, text: &str) -> Result<(String, std::path::PathBuf), String> {
   let name = format!("Shimmy report {stamp}.txt");
   let file = dir.join(&name);
-  std::fs::write(&file, text).map_err(|e| format!("Could not save it to Downloads: {e}"))?;
+  crate::store::write_new(dir, &name, text.as_bytes()).map_err(|e| format!("Could not save it to Downloads: {e}"))?;
   let _ = std::process::Command::new("explorer.exe").arg(format!("/select,{}", file.display())).spawn();
   Ok((name, file))
 }

@@ -306,6 +306,29 @@ pub fn hidden(cmd: &str, args: &[&str]) -> std::io::Result<std::process::Output>
   Command::new(cmd).args(args).stdin(Stdio::null()).creation_flags(CREATE_NO_WINDOW).output()
 }
 
+/// Module names `powershell` loads, by full path, for a script that needs them.
+pub const PS_BASE: [&str; 2] = ["Microsoft.PowerShell.Management", "Microsoft.PowerShell.Utility"];
+
+/// The script `powershell` runs: module auto-loading off, then each module from Windows' own folder.
+pub fn ps_script(modules: &[&str], script: &str) -> String {
+  let list = modules.iter().map(|m| format!("'{m}'")).collect::<Vec<_>>().join(",");
+  format!("$PSModuleAutoLoadingPreference='None'\nforeach ($m in {list}) {{ Import-Module \"$PSHOME\\Modules\\$m\" -ErrorAction Stop }}\n{script}")
+}
+
+/// Runs a script in Windows' own PowerShell. Shimmy is administrator, and PowerShell looks for modules in the user's
+/// Documents folder first, which any program can write to, so nothing may be found by name: a planted module of the same
+/// name would run as administrator. Only ever run scripts through here.
+pub fn powershell(modules: &[&str], script: &str) -> std::io::Result<std::process::Output> {
+  let not_found = || std::io::Error::new(std::io::ErrorKind::NotFound, "Windows' folder is not known");
+  let home = known("SystemRoot").ok_or_else(not_found)?.join(r"System32\WindowsPowerShell\v1.0");
+  Command::new(home.join("powershell.exe"))
+    .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", &ps_script(modules, script)])
+    .env("PSModulePath", home.join("Modules"))
+    .stdin(Stdio::null())
+    .creation_flags(CREATE_NO_WINDOW)
+    .output()
+}
+
 /// Like `hidden`, but the program is killed after `limit`, with a TimedOut error: for tools that can hang on the
 /// network or a prompt (winget), so a job never stays "running" for good.
 pub fn hidden_for(cmd: &str, args: &[&str], limit: Duration) -> std::io::Result<std::process::Output> {

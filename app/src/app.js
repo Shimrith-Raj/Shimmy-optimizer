@@ -1761,7 +1761,8 @@ async function loadSense() {
   let r;
   try { r = await api('/api/sense'); } catch (e) { return toast(e.message, true); }
   S.sense = r;
-  S.senseSecs ??= r.prefs.intervalS;
+  // settings.json can hold any interval; the menu must show the one that will be used.
+  S.senseSecs ??= SENSE_SECS.some(([n]) => n === r.prefs.intervalS) ? r.prefs.intervalS : 5;
   // Your last choice, or the suggested few until you touch a tick. The sensor reader's rows can arrive after the first look.
   if (!S.senseTouched) S.senseSel = new Set(r.prefs.chosen.length ? r.prefs.chosen : r.sources.filter((x) => x.suggested).map((x) => x.id));
   renderSense();
@@ -1779,6 +1780,9 @@ function renderSense() {
   S.senseDrawn = key;
   const groups = new Map();
   sources.forEach((x) => groups.set(x.hw, [...(groups.get(x.hw) || []), x]));
+  // A sensor ticked earlier that has gone (a removed drive, say) still needs a tick to clear.
+  const gone = [...S.senseSel].filter((id) => !sources.some((x) => x.id === id));
+  if (gone.length) groups.set('Not reading right now', gone.map((id) => ({ id, sensor: id.split('|').slice(0, -1).join(' '), unit: '' })));
   const v = j.result;
   $('#senseLog').innerHTML = `<div class="set-block sense reveal in"><div class="set-head"><div><h3>Sensor log</h3><p>Writes the readings you tick to a CSV in Downloads. It runs until you press Stop or Shimmy exits, and stops itself at 100 MB. The graphics chips are left out, because asking would wake a sleeping one.</p></div></div>
     ${j.running
@@ -1834,17 +1838,18 @@ function renderNet() {
   $('#netFacts').innerHTML = [
     [apps.filter((a) => a.internet).length, 'Apps on the internet'],
     [all.filter((c) => c.place === 'Internet' && c.state === 'Connected').length, 'Internet connections'],
-    [all.filter((c) => c.place === 'Local network').length, 'On your local network'],
-    [all.filter((c) => c.state === 'Listening').length, 'Ports listening'],
+    [all.filter((c) => c.place === 'Local network' && c.state === 'Connected').length, 'On your local network'],
+    [all.filter((c) => c.state === 'Listening' && !c.place).length, 'Ports listening'],
   ].map(([v, l]) => `<div><b>${v}</b><span>${l}</span></div>`).join('');
   const max = Math.max(1, ...apps.map((a) => a.conns.length));
   S.netOpen ??= new Set();
   $('#netList').innerHTML = apps.map((a) => {
-    const sub = [a.internet && `${a.internet} internet`, a.local && `${a.local} local network`, own && a.thisPc && `${a.thisPc} this PC`, a.waiting && `${a.waiting} waiting`].filter(Boolean).join(' · ');
+    const closing = a.conns.filter((c) => c.state === 'Closing').length;
+    const sub = [a.internet && `${a.internet} internet`, a.local && `${a.local} local network`, own && a.thisPc && `${a.thisPc} this PC`, a.waiting && `${a.waiting} waiting`, closing && `${closing} closing`].filter(Boolean).join(' · ');
     const open = S.netOpen.has(a.app);
-    const rows = open ? `<div class="rows net-conns">${a.conns.map((c) => {
+    const rows = open ? `<div class="rows net-conns">${a.paths.map((p) => `<div class="row net-path"><span class="muted">${esc(p)}</span></div>`).join('')}${a.conns.map((c) => {
       const far = c.remote ? `${c.remote.includes(':') ? `[${c.remote}]` : c.remote}:${c.remotePort}` : `Port ${c.localPort}`;
-      const bits = c.remote ? [c.place, c.state, c.proto, `from port ${c.localPort}`] : [c.state === 'Open' ? 'Open for anything arriving' : c.state, c.proto, `on ${c.local}`];
+      const bits = c.remote ? [c.place, c.state, c.proto, `from port ${c.localPort}`] : [c.place === 'This PC' ? 'Only this PC can reach it' : c.state === 'Open' ? 'Waiting for data' : c.state, c.proto, `on ${c.local}`];
       return `<div class="row"><span>${esc(far)}</span><span class="muted">${esc(bits.join(' · '))}</span></div>`;
     }).join('')}</div>` : '';
     return `<div class="frow drill" data-net="${esc(a.app)}" aria-expanded="${open}"><b>${esc(a.app)}<span class="where">${esc(sub)}</span></b><span class="num">${a.conns.length}</span><span class="bar-col"><span class="meter"><i style="width:${(a.conns.length / max) * 100}%"></i></span></span><span></span></div>${rows}`;
