@@ -82,9 +82,10 @@ pub fn categories() -> Vec<(&'static str, &'static str)> {
 pub fn known(var: &str) -> Option<PathBuf> {
   use windows::Win32::System::Com::CoTaskMemFree;
   use windows::Win32::UI::Shell::{
-    FOLDERID_LocalAppData, FOLDERID_Profile, FOLDERID_ProgramData, FOLDERID_ProgramFiles, FOLDERID_RoamingAppData, FOLDERID_Windows, SHGetKnownFolderPath, KF_FLAG_DEFAULT,
+    FOLDERID_Downloads, FOLDERID_LocalAppData, FOLDERID_Profile, FOLDERID_ProgramData, FOLDERID_ProgramFiles, FOLDERID_RoamingAppData, FOLDERID_Windows, SHGetKnownFolderPath, KF_FLAG_DEFAULT,
   };
   let id = match var {
+    "Downloads" => &FOLDERID_Downloads,
     "LOCALAPPDATA" => &FOLDERID_LocalAppData,
     "APPDATA" => &FOLDERID_RoamingAppData,
     "ProgramData" => &FOLDERID_ProgramData,

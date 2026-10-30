@@ -80,6 +80,34 @@ impl Steady {
   }
 }
 
+/// One reading without the running app, for `--report`. The second line is the one used: the processor's power and load
+/// need two passes to mean anything. Whatever arrived is returned when time runs out.
+pub fn read_once(exe: &std::path::Path, limit: Duration) -> Option<Vec<Reading>> {
+  let mut child = Command::new(exe).arg("1000").stdout(Stdio::piped()).stderr(Stdio::null()).stdin(Stdio::null()).creation_flags(CREATE_NO_WINDOW).spawn().ok()?;
+  let out = child.stdout.take()?;
+  let (tx, rx) = std::sync::mpsc::channel();
+  std::thread::spawn(move || {
+    for line in BufReader::new(out).lines().map_while(Result::ok) {
+      if let Ok(rows) = serde_json::from_str::<Vec<Reading>>(&line) {
+        if tx.send(rows).is_err() {
+          return;
+        }
+      }
+    }
+  });
+  let deadline = std::time::Instant::now() + limit;
+  let mut got = None;
+  for _ in 0..2 {
+    match rx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())) {
+      Ok(rows) => got = Some(rows),
+      Err(_) => break,
+    }
+  }
+  let _ = child.kill();
+  let _ = child.wait();
+  got.map(|rows| Steady::default().apply(rows, crate::store::now_ms()))
+}
+
 struct Job(HANDLE);
 unsafe impl Send for Job {}
 

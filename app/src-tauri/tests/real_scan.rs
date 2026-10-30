@@ -121,6 +121,21 @@ fn real_nvidia() {
   println!("{:#?}", shimmy_lib::gpu::nvidia(&nvml).expect("gpu"));
 }
 
+/// P3 Step 1: Windows' connection tables, to compare with `netstat -ano`.
+#[test]
+#[ignore]
+fn connections() {
+  let t = Instant::now();
+  let conns = shimmy_lib::net::list().expect("tables");
+  println!("{} sockets in {:?}", conns.len(), t.elapsed());
+  let count = |proto: &str, state: &str| conns.iter().filter(|c| c.proto == proto && c.state == state).count();
+  println!("TCP connected {}, listening {}, closing {}, connecting {}, UDP {}", count("TCP", "Connected"), count("TCP", "Listening"), count("TCP", "Closing"), count("TCP", "Connecting"), count("UDP", "Open"));
+  for c in conns.iter().filter(|c| c.state == "Connected").take(8) {
+    println!("{c:?}");
+  }
+  assert!(!conns.is_empty());
+}
+
 /// Phase 7 firmware test: writes the charge limit from SHIMMY_LIMIT (the same call as the Battery page buttons).
 /// Changes a firmware setting, so it is only run by hand: SHIMMY_LIMIT=61 cargo test --test real_scan set_limit -- --ignored
 #[test]

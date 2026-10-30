@@ -8,7 +8,7 @@ A Windows 11 system tool for one laptop (ASUS Vivobook M3500QC: Ryzen 7 5800HS, 
 Built with **Tauri 2** (Rust core, vanilla HTML/CSS/JS UI). It **always runs as Administrator** and lives in the tray.
 
 ## Pages
-Home (four readouts and Clean now) · Memory · Processor · Graphics · Storage · Clean · Battery · Apps · Programs · Startup · System · Log · Settings · Updates.
+Home (four readouts and Clean now) · Memory · Processor · Graphics · Storage · Clean · Battery · Apps · Programs · Startup · Connections · System · Log · Settings · Updates.
 
 ## Layout
 | Path | Purpose |
@@ -27,6 +27,7 @@ Home (four readouts and Clean now) · Memory · Processor · Graphics · Storage
 | `battery.rs`, `asus.rs` | Battery page; ASUS ATK (`\\.\ATKACPI`) for fans and the charge limit |
 | `auto.rs` | Alerts, automatic memory clean, weekly clean: pure decision functions, unit-tested |
 | `autostart.rs` | The "Shimmy Optimizer" Task Scheduler task (highest privileges, runs on battery, `--tray`) |
+| `net.rs`, `senselog.rs`, `report.rs` | Connections page (read only); sensor log to CSV; the `--report` one-page summary |
 | `store.rs`, `startup.rs`, `tray.rs` | History and CSV log; startup entries; the live RAM ring tray icon |
 | `installer-hooks.nsh` | NSIS: installs PawnIO silently, then `shimmy-optimizer.exe --autostart on`; uninstall runs `--autostart off` |
 | `design/icon.svg` | Icon master (lime ring and sparkle on a near-black tile); `tauri icon` makes the set |
@@ -45,7 +46,7 @@ Data lives in `%APPDATA%\com.shimmy.optimizer\`: `settings.json`, `history.json`
   `releases/latest/download/Shimmy-Optimizer-Setup.exe`, so any other name breaks them.
 - **Dev build:** `SHIMMY_NO_ADMIN=1 CARGO_TARGET_DIR=src-tauri/target-dev npx tauri build --no-bundle --config '{"identifier":"com.shimmy.optimizer.dev"}'`.
   It has no admin manifest and its own data folder, so it runs beside the real Shimmy. It has no CPU temperature, and Start with Windows is refused.
-- **Tests:** in `app/src-tauri`, `SHIMMY_NO_ADMIN=1 CARGO_TARGET_DIR=target-dev cargo test` (96 tests). Real-PC checks: add `--test real_scan -- --ignored`. They read only, except `set_limit`, which
+- **Tests:** in `app/src-tauri`, `SHIMMY_NO_ADMIN=1 CARGO_TARGET_DIR=target-dev cargo test` (115 tests). Real-PC checks: add `--test real_scan -- --ignored`. They read only, except `set_limit`, which
   writes the charge limit and runs only when `SHIMMY_LIMIT` is set.
 - The frontend is embedded in the exe, so UI changes need a rebuild. An elevated Shimmy that is running locks its exe: quit it from the tray first.
 
@@ -55,4 +56,4 @@ Data lives in `%APPDATA%\com.shimmy.optimizer\`: `settings.json`, `history.json`
 - Everything destructive or automatic is logged to `actions-log.csv`.
 
 ## State
-Phases 0 to 10 are done and merged (v0.5.1, 2026-10-28). `PLAN_premium_features.md` P1 and P2 are built, bug-swept and merged (v0.8.0, 2026-10-30); P3 is next. Still open: the taste-skill inspection pass on the UI. See `PLAN.md` § Progress.
+Phases 0 to 10 are done and merged (v0.5.1, 2026-10-28). `PLAN_premium_features.md` P1 and P2 are built, bug-swept and merged (v0.8.0, 2026-10-30); P3 is built on branch `premium-p3` (v0.9.0, not merged or released). Still open: the taste-skill inspection pass on the UI. See `PLAN.md` § Progress.

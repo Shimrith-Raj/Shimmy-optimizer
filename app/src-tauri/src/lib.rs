@@ -12,10 +12,13 @@ pub mod heat;
 pub mod hold;
 pub mod hw;
 pub mod jobs;
+pub mod net;
 pub mod power;
 pub mod prio;
 pub mod procs;
 pub mod programs;
+pub mod report;
+pub mod senselog;
 pub mod sensors;
 pub mod storage;
 pub mod startup;
@@ -104,6 +107,9 @@ pub struct Shared {
   uninstaller: Mutex<Option<std::process::Child>>,
   /// Processes Shimmy lowered (prio.rs), so each can be put back.
   prio_applied: Mutex<prio::Applied>,
+  /// The sensor log (senselog.rs) and its Stop button.
+  sensor_log: jobs::Slot<senselog::Done>,
+  sensor_log_stop: Arc<AtomicBool>,
   settings: Mutex<Settings>,
   settings_path: PathBuf,
 }
@@ -127,6 +133,8 @@ struct Settings {
   updates: auto::UpdatePrefs,
   /// Power mode follows the charger (power.rs).
   power: power::PowerPrefs,
+  /// The sensor log's last choice (senselog.rs). Changed only by `start_sensor_log`; kept by Shimmy.
+  sensor_log: senselog::Prefs,
   /// When Shimmy last made a restore point (ms). Kept by Shimmy.
   restore_point_at: u64,
   /// The user accepted the warning that ASUS firmware writes were not tested on this model. Kept by Shimmy.
@@ -367,12 +375,32 @@ impl Shared {
   }
 
   fn fans(&self) -> Vec<cpu::Fan> {
-    let Some(atk) = &self.atk else { return Vec::new() };
-    [("Processor fan", asus::CPU_FAN), ("Graphics fan", asus::GPU_FAN)]
-      .into_iter()
-      .filter_map(|(name, id)| atk.fan_rpm(id).map(|rpm| cpu::Fan { name: name.into(), rpm }))
-      .collect()
+    self.atk.as_ref().map_or(Vec::new(), fans_of)
   }
+
+  /// Everything the sensor log can write: Shimmy's own readings, which work without administrator rights, then the
+  /// sensor reader's.
+  fn log_rows(&self) -> Vec<sensors::Reading> {
+    let rows = self.readings().0.unwrap_or_default();
+    let live = self.cpu_live.lock().unwrap().clone();
+    let view = cpu::build(String::new(), &self.topology, &live, self.base_mhz, Some(&rows), Vec::new(), None);
+    let own = |sensor: &str, kind: &str, value: Option<f64>| sensors::Reading { hw: senselog::OWN_HW.into(), hw_type: "Shimmy".into(), sensor: sensor.into(), kind: kind.into(), value };
+    let battery = system::battery_now();
+    let mut out = vec![own("Processor use", "Load", Some(live.total as f64)), own("Processor clock", "Clock", view.avg_clock_mhz), own("Memory in use", "Load", Some(system::mem_now().pct as f64))];
+    if battery.present {
+      out.push(own("Battery charge", "Level", battery.pct.map(f64::from)));
+    }
+    out.extend(self.fans().into_iter().map(|f| own(&f.name, "Fan", Some(f.rpm as f64))));
+    out.extend(rows);
+    out
+  }
+}
+
+fn fans_of(atk: &asus::Atk) -> Vec<cpu::Fan> {
+  [("Processor fan", asus::CPU_FAN), ("Graphics fan", asus::GPU_FAN)]
+    .into_iter()
+    .filter_map(|(name, id)| atk.fan_rpm(id).map(|rpm| cpu::Fan { name: name.into(), rpm }))
+    .collect()
 }
 
 type Shr = Arc<Shared>;
@@ -1456,6 +1484,133 @@ fn local_stamp() -> String {
   format!("{:04}-{:02}-{:02} {:02}{:02}{:02}", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond)
 }
 
+/// Local date and time for people to read, such as 2026-10-29 14:32:05.
+fn local_clock() -> String {
+  let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+  format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond)
+}
+
+/// Every socket by app. The names are the same ones the Apps page uses.
+fn connections(s: &Shared) -> Result<Vec<net::AppConns>, String> {
+  let conns = net::list()?;
+  let procs_now = system::list_procs(&mut s.sys.lock().unwrap());
+  let own = system::own_pids(&procs_now);
+  let names = procs_now.iter().map(|p| (p.pid, classify(p, &own, &Marks::new()).app)).collect();
+  Ok(net::by_app(conns, &names))
+}
+
+/// The Connections page: read only (net.rs).
+#[tauri::command]
+async fn get_connections(s: State<'_, Shr>) -> Result<Value, String> {
+  let s = s.inner().clone();
+  tauri::async_runtime::spawn_blocking(move || Ok(json!({ "apps": connections(&s)? }))).await.map_err(|e| e.to_string())?
+}
+
+/// The System page's Save a report, from what the running app already knows (report.rs).
+#[tauri::command]
+async fn save_report(app: AppHandle, s: State<'_, Shr>) -> Result<Value, String> {
+  let s = s.inner().clone();
+  let dir = app.path().download_dir().map_err(|e| e.to_string())?;
+  tauri::async_runtime::spawn_blocking(move || {
+    let hw = s.hw_info.lock().unwrap().clone().or_else(|| hw::read().ok());
+    let snap = report::Snapshot {
+      when: local_clock(),
+      hw,
+      cpu_load: Some(s.cpu_live.lock().unwrap().total as f64),
+      rows: s.readings().0,
+      fans: s.fans(),
+      mem: system::mem_now(),
+      drives: storage::drives(),
+      battery: system::battery_now(),
+      uptime_s: System::uptime(),
+      power_mode: power::current().map(power::label).map(String::from),
+      procs: system::list_procs(&mut s.sys.lock().unwrap()),
+      conns: net::list().ok(),
+    };
+    let (name, _) = report::save(&dir, &local_stamp(), &report::text(&snap))?;
+    s.store.log("report", &name, &format!("saved to {}", dir.display()));
+    Ok(json!({ "name": name }))
+  })
+  .await
+  .map_err(|e| e.to_string())?
+}
+
+/// The sensor log's state, and what it can log with each reading's value now.
+#[tauri::command]
+async fn get_sensor_log(s: State<'_, Shr>) -> Result<Value, String> {
+  let s = s.inner().clone();
+  tauri::async_runtime::spawn_blocking(move || {
+    let sources: Vec<Value> = s
+      .log_rows()
+      .iter()
+      .map(|r| json!({ "id": senselog::key(r), "hw": r.hw, "sensor": r.sensor, "unit": senselog::unit(&r.kind), "value": r.value, "suggested": senselog::default_key(r) }))
+      .collect();
+    let prefs = s.settings.lock().unwrap().sensor_log.clone();
+    let job = s.sensor_log.lock().unwrap();
+    json!({ "job": &*job, "sources": sources, "prefs": prefs, "maxColumns": senselog::MAX_COLUMNS })
+  })
+  .await
+  .map_err(|e| e.to_string())
+}
+
+/// Starts writing the chosen readings to a new CSV in Downloads. The page sends only sensor names and an interval;
+/// Shimmy picks the file. Returns false when a log is already running.
+#[tauri::command]
+fn start_sensor_log(app: AppHandle, s: State<'_, Shr>, keys: Vec<String>, interval_s: u32) -> Result<bool, String> {
+  use std::io::Write;
+  let keys = senselog::check_keys(&keys)?;
+  let secs = senselog::clamp_secs(interval_s);
+  // A second Start while a log runs (or is still stopping) must not clear its Stop.
+  if s.sensor_log.lock().unwrap().running {
+    return Ok(false);
+  }
+  let name = format!("Shimmy sensor log {}.csv", local_stamp());
+  let path = app.path().download_dir().map_err(|e| e.to_string())?.join(&name);
+  let mut file = std::fs::File::create_new(&path).map_err(|e| format!("Could not start a log in Downloads: {e}"))?;
+  // The byte-order mark makes Excel read the file as UTF-8.
+  let head = format!("\u{feff}{}", senselog::header(&keys));
+  file.write_all(head.as_bytes()).map_err(|e| format!("Could not start a log in Downloads: {e}"))?;
+  s.settings.lock().unwrap().sensor_log = senselog::Prefs { interval_s: secs, chosen: keys.clone() };
+  s.save_settings();
+  s.store.log("sensor-log", &name, &format!("started: {} sensors every {secs} s", keys.len()));
+  s.sensor_log_stop.store(false, Ordering::SeqCst);
+  let s2 = s.inner().clone();
+  Ok(jobs::start(&s.sensor_log, move |progress| {
+    let (mut bytes, mut rows, mut due) = (head.len() as u64, 0u64, store::now_ms());
+    let why = loop {
+      if let Some(why) = senselog::stop_reason(s2.sensor_log_stop.load(Ordering::SeqCst), bytes) {
+        break why;
+      }
+      let now = store::now_ms();
+      if now >= due {
+        let row = senselog::line(&local_clock(), &keys, &s2.log_rows());
+        if let Err(e) = file.write_all(row.as_bytes()).and_then(|_| file.flush()) {
+          let why = format!("Stopped after {rows} rows: {e}");
+          s2.store.log("sensor-log", &name, &why);
+          notify(&app, "Sensor log stopped", &why);
+          return Err(why);
+        }
+        bytes += row.len() as u64;
+        rows += 1;
+        due = senselog::next_due(due, now, secs as u64 * 1000);
+        progress.set(format!("{rows} row{}, {} KB, in {name}", if rows == 1 { "" } else { "s" }, bytes / 1024));
+      }
+      std::thread::sleep(Duration::from_millis(200));
+    };
+    s2.store.log("sensor-log", &name, &format!("stopped: {rows} rows, {} KB", bytes / 1024));
+    if why == senselog::Why::Full {
+      alert(&app, &s2, "Sensor log stopped", &format!("{name} reached 100 MB, so Shimmy stopped it. It is in Downloads."));
+    }
+    Ok(senselog::Done { name, path: path.display().to_string(), rows, bytes, why })
+  }))
+}
+
+#[tauri::command]
+fn stop_sensor_log(s: State<'_, Shr>) -> bool {
+  s.sensor_log_stop.store(true, Ordering::SeqCst);
+  true
+}
+
 /// Saves a CSV to Downloads and shows it in File Explorer: the finder's results ("finder"), a folder's biggest folders
 /// ("folders": `path`, or your folder), or the whole Log ("log").
 #[tauri::command]
@@ -1491,6 +1646,20 @@ async fn export_csv(app: AppHandle, s: State<'_, Shr>, what: String, path: Optio
         ("biggest folders", b)
       }
       "log" => ("log", s.store.export_log().ok_or("Nothing has been logged yet.")?),
+      "connections" => {
+        let mut b = row(&["app", "protocol", "state", "where", "local address", "local port", "remote address", "remote port"]);
+        for a in connections(&s)? {
+          for c in &a.conns {
+            let place = c.place.map_or("", |p| match p {
+              net::Place::ThisPc => "This PC",
+              net::Place::Local => "Local network",
+              net::Place::Internet => "Internet",
+            });
+            b += &row(&[&a.app, c.proto, c.state, place, &c.local, &c.local_port.to_string(), c.remote.as_deref().unwrap_or(""), &c.remote_port.map_or(String::new(), |p| p.to_string())]);
+          }
+        }
+        ("connections", b)
+      }
       _ => return Err("Shimmy does not know that export.".to_string()),
     };
     let name = format!("Shimmy {label} {}.csv", local_stamp());
@@ -1547,6 +1716,7 @@ fn sanitize(st: &mut Settings) {
   auto::clamp(&mut st.alerts, &mut st.auto_clean, &mut st.weekly, &mut st.finder, &mut st.updates);
   st.caches.age_days = st.caches.age_days.clamp(1, 365);
   power::clamp(&mut st.power);
+  senselog::clamp(&mut st.sensor_log);
   st.finder.extra_roots.retain(|r| check_root(Path::new(r)).is_ok());
   st.charge_limit = st.charge_limit.filter(|p| (50..=100).contains(p));
   if st.plugged.on {
@@ -1572,6 +1742,7 @@ async fn set_settings(s: State<'_, Shr>, settings: Value) -> Result<Value, Strin
       let p = (cur.power.follow, new.power.follow, cur.power.plugged != new.power.plugged || cur.power.battery != new.power.battery);
       // Kept by Shimmy, not by the page.
       new.power.saved = cur.power.saved.clone();
+      new.sensor_log = cur.sensor_log.clone();
       new.restore_point_at = cur.restore_point_at;
       new.charge_limit = cur.charge_limit;
       new.plugged = cur.plugged.clone();
@@ -1874,6 +2045,14 @@ fn exit_app(app: &AppHandle) {
   s.restore_boost("Shimmy exited");
   s.restore_power("Shimmy exited");
   restore_priorities(&s);
+  // The log flushes every row, so this only lets it write its closing line to the Log.
+  s.sensor_log_stop.store(true, Ordering::SeqCst);
+  for _ in 0..20 {
+    if !s.sensor_log.lock().unwrap().running {
+      break;
+    }
+    std::thread::sleep(Duration::from_millis(50));
+  }
   s.store.save();
   app.exit(0);
 }
@@ -2039,6 +2218,11 @@ fn start_sampler(app: AppHandle) {
   });
 }
 
+/// `--report`: a one-page summary of this PC (report.rs). Returns the exit code, or None to start normally.
+pub fn report_step() -> Option<i32> {
+  std::env::args().any(|a| a == "--report").then(report::cli)
+}
+
 /// `--autostart on|off`, run by the installer hooks (installer-hooks.nsh). Returns the exit code, or None to start normally.
 pub fn installer_step() -> Option<i32> {
   let args: Vec<String> = std::env::args().collect();
@@ -2117,6 +2301,8 @@ pub fn run() {
         app_update_run: Default::default(),
         uninstaller: Mutex::new(None),
         prio_applied: Mutex::new(prio::Applied::new()),
+        sensor_log: Default::default(),
+        sensor_log_stop: Arc::new(AtomicBool::new(true)),
         settings: Mutex::new(settings),
         settings_path,
       }));
@@ -2142,7 +2328,7 @@ pub fn run() {
         std::thread::spawn(move || s.release());
       }
     })
-    .invoke_handler(tauri::generate_handler![get_state, get_history, get_gpu, get_storage, start_usage_scan, storage_folder, open_path, get_clean, start_clean_scan, start_clean, start_dism, start_finder, finder_delete, get_battery, set_charge_limit, set_fan_mode, set_heat_protection, get_settings, set_settings, set_app_mark, set_autostart, set_plugged_mode, start_cache_scan, start_cache_clean, folder_preview, folder_delete, empty_bin, set_hibernation, get_restore_points, open_apps_settings, get_log, get_startup, toggle_startup, close_procs, trim, quick_clean, get_update, check_update, start_update_download, install_update, get_system_info, export_csv, start_cool_check, stop_cool_check, get_programs, check_app_updates, start_app_update, uninstall_app, set_priority])
+    .invoke_handler(tauri::generate_handler![get_state, get_history, get_gpu, get_storage, start_usage_scan, storage_folder, open_path, get_clean, start_clean_scan, start_clean, start_dism, start_finder, finder_delete, get_battery, set_charge_limit, set_fan_mode, set_heat_protection, get_settings, set_settings, set_app_mark, set_autostart, set_plugged_mode, start_cache_scan, start_cache_clean, folder_preview, folder_delete, empty_bin, set_hibernation, get_restore_points, open_apps_settings, get_log, get_startup, toggle_startup, close_procs, trim, quick_clean, get_update, check_update, start_update_download, install_update, get_system_info, export_csv, start_cool_check, stop_cool_check, get_programs, check_app_updates, start_app_update, uninstall_app, set_priority, get_connections, save_report, get_sensor_log, start_sensor_log, stop_sensor_log])
     .build(tauri::generate_context!())
     .expect("error while running Shimmy Optimizer")
     .run(|_app, e| {

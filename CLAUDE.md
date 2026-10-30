@@ -66,8 +66,11 @@ Recycle Bin route is `trash::delete_all`, used by `caches.rs`.
 
 - **Premium P1/P2 modules**: `hw.rs` (System page), `power.rs` (power mode follows the charger, hand-linked powrprof
   overlay calls), `cool.rs` (cooling check), `programs.rs` (installed apps, winget updates), `prio.rs` (background
-  priority). Restore points: `clean::restore_point` via `Shared::restore_point_first`. CSV: `store::csv_row`, `export_csv`.
+  priority), `net.rs` (Connections page), `senselog.rs` (sensor log), `report.rs` (`--report` and Save a report). Restore points: `clean::restore_point` via `Shared::restore_point_first`. CSV: `store::csv_row`, `export_csv`.
   Everything Shimmy changes is put back in `exit_app` (boost, power mode, priorities).
+- **Dev testing**: the dev build's settings are real and act on this PC: with `power.follow` on it changes the power mode,
+  and killing it does not put that back. On Home, the Clean now button sits at about y 808 to 915 in `shoot.ps1`
+  coordinates, and a first click can be lost, so never aim a blind click there.
 - **Dev screenshots**: the dev build lands in `app/src-tauri/src-tauri/target-dev`, so run
   `tools/shoot.ps1 -Target 'src-tauri\target-dev'` from PowerShell (not `powershell -File`, which drops the `-Clicks`
   array), and stop that dev process afterwards or the next build fails with a locked file.
@@ -85,6 +88,6 @@ and is not the app version.
 
 ## Tests
 
-Run them in `app/src-tauri`: `SHIMMY_NO_ADMIN=1 CARGO_TARGET_DIR=target-dev cargo test`. That is 94 unit tests, plus 2 in
+Run them in `app/src-tauri`: `SHIMMY_NO_ADMIN=1 CARGO_TARGET_DIR=target-dev cargo test`. That is 113 unit tests, plus 2 in
 `tests/parity.rs`. The real-PC checks are `--test real_scan -- --ignored`. Every new gate or decision function gets unit
 tests in the same style.

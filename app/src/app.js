@@ -15,6 +15,7 @@ const COMMANDS = {
   '/api/battery': 'get_battery', '/api/settings': 'get_settings', '/api/settings/save': 'set_settings', '/api/autostart': 'set_autostart', '/api/plugged': 'set_plugged_mode', '/api/caches/scan': 'start_cache_scan', '/api/caches/run': 'start_cache_clean', '/api/folder/preview': 'folder_preview', '/api/folder/delete': 'folder_delete', '/api/bin/empty': 'empty_bin', '/api/hibernation': 'set_hibernation', '/api/restore': 'get_restore_points', '/api/apps-settings': 'open_apps_settings', '/api/charge-limit': 'set_charge_limit', '/api/fan': 'set_fan_mode', '/api/heat': 'set_heat_protection', '/api/dism': 'start_dism', '/api/finder': 'start_finder', '/api/finder/delete': 'finder_delete', '/api/startup/toggle': 'toggle_startup', '/api/update': 'get_update', '/api/update/check': 'check_update', '/api/update/download': 'start_update_download', '/api/update/install': 'install_update', '/api/close': 'close_procs', '/api/app-mark': 'set_app_mark', '/api/trim': 'trim', '/api/quickclean': 'quick_clean',
   '/api/programs': 'get_programs', '/api/programs/check': 'check_app_updates', '/api/programs/update': 'start_app_update', '/api/programs/uninstall': 'uninstall_app', '/api/priority': 'set_priority',
   '/api/system': 'get_system_info', '/api/export': 'export_csv', '/api/cool/start': 'start_cool_check', '/api/cool/stop': 'stop_cool_check',
+  '/api/net': 'get_connections', '/api/report': 'save_report', '/api/sense': 'get_sensor_log', '/api/sense/start': 'start_sensor_log', '/api/sense/stop': 'stop_sensor_log',
 };
 async function api(path, body) {
   try {
@@ -1685,6 +1686,7 @@ const RAM_TYPES = { 20: 'DDR', 21: 'DDR2', 24: 'DDR3', 26: 'DDR4', 27: 'LPDDR', 
 const tidy = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 
 async function loadSystem() {
+  loadSense();
   if (!S.hw) {
     $('#sysInfo').innerHTML = '<div class="empty">Asking Windows what is inside. This takes a few seconds…</div>';
     // One question at a time: switching tabs quickly would otherwise start a second PowerShell inventory.
@@ -1751,6 +1753,106 @@ function sysText(h) {
   return [`Shimmy Optimizer ${h.shimmy}, system info`, ...sysGroups(h).flatMap(([title, rows]) => ['', title, ...rows.map(([k, v]) => `  ${k}: ${v}`)])].join('\n');
 }
 
+// ---------- Sensor log ----------
+
+const SENSE_SECS = [[2, '2 seconds'], [5, '5 seconds'], [10, '10 seconds'], [30, '30 seconds'], [60, '1 minute'], [300, '5 minutes']];
+
+async function loadSense() {
+  let r;
+  try { r = await api('/api/sense'); } catch (e) { return toast(e.message, true); }
+  S.sense = r;
+  S.senseSecs ??= r.prefs.intervalS;
+  // Your last choice, or the suggested few until you touch a tick. The sensor reader's rows can arrive after the first look.
+  if (!S.senseTouched) S.senseSel = new Set(r.prefs.chosen.length ? r.prefs.chosen : r.sources.filter((x) => x.suggested).map((x) => x.id));
+  renderSense();
+}
+
+function renderSense() {
+  const { job: j, sources } = S.sense;
+  // Redrawn only when something other than the running count changes, so a poll does not close the list or reset a tick.
+  const key = `${j.running}|${j.at}|${j.error}|${sources.length}`;
+  if (S.senseDrawn === key) {
+    const p = $('#senseProg');
+    if (p) p.textContent = j.progress;
+    return;
+  }
+  S.senseDrawn = key;
+  const groups = new Map();
+  sources.forEach((x) => groups.set(x.hw, [...(groups.get(x.hw) || []), x]));
+  const v = j.result;
+  $('#senseLog').innerHTML = `<div class="set-block sense reveal in"><div class="set-head"><div><h3>Sensor log</h3><p>Writes the readings you tick to a CSV in Downloads. It runs until you press Stop or Shimmy exits, and stops itself at 100 MB. The graphics chips are left out, because asking would wake a sleeping one.</p></div></div>
+    ${j.running
+      ? `<div class="cool-go"><button class="btn danger" data-sense-stop>Stop the log</button><span class="muted" id="senseProg">${esc(j.progress)}</span></div>`
+      : `<div class="cool-go"><select id="senseSecs" aria-label="How often">${SENSE_SECS.map(([n, l]) => `<option value="${n}" ${S.senseSecs === n ? 'selected' : ''}>Every ${l}</option>`).join('')}</select><button class="btn" data-sense-start>Start the log</button></div>
+        <details class="sense-pick" ${S.senseOpen ? 'open' : ''}><summary id="senseCount"></summary>${[...groups].map(([hw, list]) => `<h4>${esc(hw)}</h4><div class="ticks">${list.map((x) => `<label><input type="checkbox" class="tick" data-sense="${esc(x.id)}" ${S.senseSel.has(x.id) ? 'checked' : ''}>${esc(x.sensor)}${x.unit ? ` <span class="muted">${esc(x.unit)}</span>` : ''}</label>`).join('')}</div>`).join('')}</details>`}
+    ${j.error ? `<p class="blocked">${esc(j.error)}</p>` : ''}
+    ${v && !j.running ? `<div class="row"><span>${esc(v.name)} <span class="muted">${v.rows} row${v.rows === 1 ? '' : 's'}, ${fmtB(v.bytes)}, stopped because ${esc(v.why)}</span></span><button class="btn small ghost" data-open="${esc(v.path)}">Show</button></div>` : ''}
+  </div>`;
+  senseCount();
+}
+
+function senseCount() {
+  const c = $('#senseCount');
+  if (c) c.textContent = `${S.senseSel.size} sensor${S.senseSel.size === 1 ? '' : 's'} ticked. Choose which`;
+}
+
+$('#senseLog').addEventListener('toggle', (e) => { if (e.target.matches('.sense-pick')) S.senseOpen = e.target.open; }, true);
+$('#senseLog').addEventListener('change', (e) => {
+  if (e.target.id === 'senseSecs') S.senseSecs = Number(e.target.value);
+  const id = e.target.dataset.sense;
+  if (id == null) return;
+  S.senseTouched = true;
+  if (e.target.checked) S.senseSel.add(id); else S.senseSel.delete(id);
+  senseCount();
+});
+$('#senseLog').addEventListener('click', async (e) => {
+  const start = e.target.closest('[data-sense-start]'), stop = e.target.closest('[data-sense-stop]');
+  if (!start && !stop) return;
+  e.target.disabled = true;
+  try {
+    if (start) await api('/api/sense/start', { keys: [...S.senseSel], intervalS: S.senseSecs });
+    else await api('/api/sense/stop');
+    // Stopping takes up to a fifth of a second.
+    setTimeout(loadSense, stop ? 400 : 100);
+  } catch (err) { toast(err.message, true); e.target.disabled = false; }
+});
+
+// ---------- Connections ----------
+
+async function loadNet() {
+  // One question at a time: a slow answer must not be overtaken by the next poll's.
+  if (S.netAsking) return;
+  S.netAsking = true;
+  try { S.net = await api('/api/net'); renderNet(); } catch (e) { $('#netList').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  S.netAsking = false;
+}
+
+function renderNet() {
+  const own = $('#netOwn').checked;
+  const apps = S.net.apps.map((a) => ({ ...a, conns: own ? a.conns : a.conns.filter((c) => c.place !== 'This PC') })).filter((a) => a.conns.length);
+  const all = apps.flatMap((a) => a.conns);
+  $('#netFacts').innerHTML = [
+    [apps.filter((a) => a.internet).length, 'Apps on the internet'],
+    [all.filter((c) => c.place === 'Internet' && c.state === 'Connected').length, 'Internet connections'],
+    [all.filter((c) => c.place === 'Local network').length, 'On your local network'],
+    [all.filter((c) => c.state === 'Listening').length, 'Ports listening'],
+  ].map(([v, l]) => `<div><b>${v}</b><span>${l}</span></div>`).join('');
+  const max = Math.max(1, ...apps.map((a) => a.conns.length));
+  S.netOpen ??= new Set();
+  $('#netList').innerHTML = apps.map((a) => {
+    const sub = [a.internet && `${a.internet} internet`, a.local && `${a.local} local network`, own && a.thisPc && `${a.thisPc} this PC`, a.waiting && `${a.waiting} waiting`].filter(Boolean).join(' · ');
+    const open = S.netOpen.has(a.app);
+    const rows = open ? `<div class="rows net-conns">${a.conns.map((c) => {
+      const far = c.remote ? `${c.remote.includes(':') ? `[${c.remote}]` : c.remote}:${c.remotePort}` : `Port ${c.localPort}`;
+      const bits = c.remote ? [c.place, c.state, c.proto, `from port ${c.localPort}`] : [c.state === 'Open' ? 'Open for anything arriving' : c.state, c.proto, `on ${c.local}`];
+      return `<div class="row"><span>${esc(far)}</span><span class="muted">${esc(bits.join(' · '))}</span></div>`;
+    }).join('')}</div>` : '';
+    return `<div class="frow drill" data-net="${esc(a.app)}" aria-expanded="${open}"><b>${esc(a.app)}<span class="where">${esc(sub)}</span></b><span class="num">${a.conns.length}</span><span class="bar-col"><span class="meter"><i style="width:${(a.conns.length / max) * 100}%"></i></span></span><span></span></div>${rows}`;
+  }).join('') || '<div class="empty">Nothing is connected right now.</div>';
+}
+
+$('#netOwn').addEventListener('change', () => S.net && renderNet());
+
 async function loadLog() {
   try {
     const rows = (await api('/api/log')).rows;
@@ -1775,6 +1877,7 @@ function setTab(t) {
   if (t === 'startup') loadStartup();
   if (t === 'log') loadLog();
   if (t === 'system') loadSystem();
+  if (t === 'net') loadNet();
   if (t === 'programs') loadPrograms();
   if (t === 'apps') {
     const wrap = $('#tab-apps .table-wrap');
@@ -1828,6 +1931,18 @@ document.addEventListener('click', async (e) => {
   }
   if (e.target.closest('[data-cool-start]')) return confirmCool();
   if (e.target.closest('[data-cool-stop]')) return api('/api/cool/stop').then(refresh, (err) => toast(err.message, true));
+  const netRow = e.target.closest('[data-net]');
+  if (netRow) {
+    const app = netRow.dataset.net;
+    if (!S.netOpen.delete(app)) S.netOpen.add(app);
+    return renderNet();
+  }
+  if (e.target.id === 'sysReport') {
+    e.target.disabled = true;
+    try { toast(`Saved “${(await api('/api/report')).name}” to Downloads.`); } catch (err) { toast(err.message, true); }
+    e.target.disabled = false;
+    return;
+  }
   if (e.target.id === 'sysCopy' && S.hw) {
     try { await navigator.clipboard.writeText(sysText(S.hw)); toast('Copied. Paste it into your bug report.'); } catch (err) { toast('Windows did not allow copying: ' + err.message, true); }
     return;
@@ -2008,6 +2123,8 @@ async function refresh() {
     if (S.tab === 'clean') loadClean();
     if (S.tab === 'battery') loadBattery();
     if (S.tab === 'gpu') loadGpuPage();
+    if (S.tab === 'net') loadNet();
+    if (S.tab === 'system') loadSense();
     if (S.focus != null) focusSeg(S.focus);
   } catch (e) {
     $('#dot').className = 'err';

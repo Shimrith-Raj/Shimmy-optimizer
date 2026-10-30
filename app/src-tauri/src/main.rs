@@ -6,5 +6,9 @@ fn main() {
   if let Some(code) = shimmy_lib::installer_step() {
     std::process::exit(code);
   }
+  // `--report` prints a one-page summary of this PC and exits, without opening Shimmy.
+  if let Some(code) = shimmy_lib::report_step() {
+    std::process::exit(code);
+  }
   shimmy_lib::run();
 }

@@ -24,6 +24,7 @@
     <button data-tab="apps"><svg viewBox="0 0 24 24"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></svg>Apps</button>
     <button data-tab="programs"><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM4 9h16M8 13h8M8 16h5"/></svg>Programs</button>
     <button data-tab="startup"><svg viewBox="0 0 24 24"><path d="M12 3v9M6.3 6.3a8 8 0 1 0 11.4 0"/></svg>Startup</button>
+    <button data-tab="net"><svg viewBox="0 0 24 24"><path d="M4 8h15M15 4l4 4-4 4M20 16H5M9 12l-4 4 4 4"/></svg>Connections</button>
     <button data-tab="system"><svg viewBox="0 0 24 24"><path d="M3 5h18v11H3zM8 20h8M12 16v4"/></svg>System</button>
     <button data-tab="log"><svg viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 9h8M8 13h8M8 17h5"/></svg>Log</button>
     <button data-tab="settings"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6"/></svg>Settings</button>
@@ -297,10 +298,18 @@
     <div class="table-wrap"><table id="startupTable"><thead><tr><th>Name</th><th>Command</th><th>Source</th><th>Hint</th><th class="num">Enabled</th></tr></thead><tbody></tbody></table></div>
   </section>
 
+  <section id="tab-net" hidden>
+    <div class="page-head reveal"><h2>Connections</h2><div class="head-acts"><label class="perm net-own"><input type="checkbox" class="tick" id="netOwn">Show this PC talking to itself</label><button class="btn ghost" data-export="connections">Export</button></div></div>
+    <p class="muted lead">Which app holds which connection right now, from Windows' own tables. Read only: nothing here blocks or changes anything. Shimmy does not look addresses up, so you see addresses rather than website names, and it does not measure traffic.</p>
+    <div class="facts four reveal" id="netFacts"></div>
+    <div id="netList" class="folders"></div>
+  </section>
+
   <section id="tab-system" hidden>
-    <div class="page-head reveal"><h2>This PC</h2><button class="btn ghost" id="sysCopy" disabled>Copy for a bug report</button></div>
-    <p class="muted lead">What is inside, from Windows' own hardware inventory. Read only. Serial numbers are not read, so the copied text is safe to paste anywhere.</p>
+    <div class="page-head reveal"><h2>This PC</h2><div class="head-acts"><button class="btn ghost" id="sysReport">Save a report</button><button class="btn ghost" id="sysCopy" disabled>Copy for a bug report</button></div></div>
+    <p class="muted lead">What is inside, from Windows' own hardware inventory. Read only. Serial numbers are not read, so the copied text and the report are safe to paste anywhere. <code>shimmy-optimizer.exe --report</code> prints the same report in a terminal.</p>
     <div class="facts reveal" id="sysFacts"></div>
+    <div id="senseLog"></div>
     <div id="sysInfo"></div>
   </section>
 

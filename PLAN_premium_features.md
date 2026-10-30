@@ -94,7 +94,7 @@ changes to `lib.rs`, `app.js` and `PLAN.md`.
 - **A3:** not testable without elevation. `SRSetRestorePointW` needs the `Win32_System_Restore` feature. Failures
   (protection off, one-per-24 h) are logged and shown, and the clean-up still runs.
 
-## P1 built (2026-10-29, v0.7.0, not committed or released)
+## P1 built (2026-10-29, released in v0.8.0)
 
 - **A1** `hw.rs` + System page: one hidden PowerShell CIM query (about 5 s, kept until the window closes), VRAM from the
   display class keys, drives from `Get-PhysicalDisk`. No serials. Copy uses the WebView clipboard. Sticks are numbered by
@@ -108,7 +108,7 @@ changes to `lib.rs`, `app.js` and `PLAN.md`.
 - **A6** `alerts.junkGb` (default 5 GB, 0 is off): hourly scan on its own thread, at most once a day.
 - **A7** clean category `recent`, off by default, to the Recycle Bin, keeps Explorer's Quick access jump list.
 
-## P2 built (2026-10-30, not committed or released)
+## P2 built (2026-10-30, released in v0.8.0)
 
 - **Step 1:** winget 1.29 lists 24 updates in about 5 s; 66 apps in the Uninstall keys (46 with a size, 12 MSI); install
   dates come as `20261028` or `5/13/2026`.
@@ -119,7 +119,27 @@ changes to `lib.rs`, `app.js` and `PLAN.md`.
 - **A11** `prio.rs`: Below normal, Low, Efficiency mode (Low + EcoQoS). Set per app in its expanded row on the Apps page,
   same built-in gate as Safe marks, applied every 30 s to new processes, put back on Exit. Not reverted after a crash
   (Windows keeps a process's priority until it exits).
-- Version still 0.7.0: bump to 0.8.0 if P1 and P2 ship separately.
+
+## P3 Step 1 results (run 2026-10-30, not elevated)
+
+- **A12:** `GetExtendedTcpTable` and `GetExtendedUdpTable` are in the `windows` crate (`Win32_NetworkManagement_IpHelper`).
+  The tables gave 117 sockets in about 3 ms and matched `netstat -ano` exactly: 39 connected, 27 listening, 9 closing, 42 UDP.
+
+## P3 built (2026-10-30, v0.9.0, branch `premium-p3`, not committed or released)
+
+- **A12** `net.rs` + Connections page: every TCP and UDP socket, IPv4 and IPv6, by app, with the internet first. Addresses are
+  not looked up, so the page makes no network use, and traffic is not measured. Sockets of this PC talking to itself are
+  hidden behind a tick. Also exported as CSV. Refreshes every 5 s, only while the page is open.
+- **A10 sensor log** `senselog.rs` + System page: ticked readings to a new CSV in Downloads, every 2 s to 5 min, up to 40
+  columns. Every row is flushed. It stops on Stop, on Exit, on a write error or at 100 MB, and does not resume after a
+  restart. Graphics chips are left out, because the sensor reader leaves them out to let the RTX sleep. Shimmy's own
+  readings (use, clock, memory, battery, fans) work without administrator rights.
+- **A10 report** `report.rs`: `--report` and Save a report on the System page. No serials, user name or addresses. It takes
+  about 15 s from the command line, because it reads the inventory and starts its own sensor reader. It prints to a redirect,
+  a pipe or the terminal that started it. A windowed program does not hold the prompt, so the prompt comes back first and
+  the report follows. With nowhere to print, it saves to Downloads and shows the file.
+- **Not yet run elevated:** temperatures and package power in the log and report. From a non-elevated terminal the installed
+  build asks for elevation and has no console to borrow, so that path should save to Downloads: check it on first real use.
 
 ## Risks
 
