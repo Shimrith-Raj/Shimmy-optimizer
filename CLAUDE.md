@@ -26,7 +26,7 @@ overwrites it. UI: `renderSettings` with the helpers `block`, `sw`, `num`, `fiel
 The change handler coerces with `Number()`, so a string select needs its own branch.
 
 **A log entry.** `s.store.log(action, target, detail)` (`store.rs`) appends to `actions-log.csv`. `read_log` returns the
-last 100 rows, newest first. `log_file()` is private.
+last 100 rows, newest first.
 
 **A notification.** `alert(app, s, title, body)` in `lib.rs` notifies and logs it. `notify()` is the bare call.
 
@@ -37,14 +37,21 @@ never run in the tick (see the daily update check).
 
 **A Clean category.** `const DEFS: [Def; N]` in `clean.rs` (`Def {id, title, why, default_on}`), paths in `targets(id)`
 (base folders only from `clean::known`, Windows' known folders, never from environment variables such as TEMP), sizes
-from `scan`, and the delete in `run` through `delete_files`, which is a **permanent** `fs::remove_file`. The
-Recycle Bin route is `trash::delete_all`, used by `caches.rs`.
+from `scan`, and the delete in `run` through `delete_files`, which is a **permanent** `store::delete_exact`. `targets`
+drops any target that is not really where its path says (`store::really_at`), because a standard program can replace a
+folder in AppData with a link. Only Recent items recycle (`recycle_files`). The other Recycle Bin route is
+`trash::delete_all`, used by `caches.rs`, which leaves in place what is too big for the bin.
+
+**Anything that deletes.** Check with `store::really_at(trusted_folder, path)` and delete by handle with
+`store::delete_exact`, never by path alone: Shimmy is administrator, and a parent folder can be swapped for a link
+after the check. Take a turn with `Shared::disk_turn()`, so only one thing deletes from the disk at a time.
 
 ## Where things are
 
 - **Heat protection** (`heat.rs`): 90 °C for 30 s turns processor boost off, and 75 °C for 2 min turns it back on. It
   changes power settings only through `powercfg.exe` (`/qh`, `/setacvalueindex`, `/setdcvalueindex` and `/setactive`).
-  The old values are saved in `settings.heat.saved` (`SavedBoost`). Every restore goes through `restore_boost` in
+  The old values are saved in `settings.heat.saved` (`SavedBoost`) before boost is changed (`read_boost`, then
+  `boost_off`). Every restore goes through `restore_boost` in
   `lib.rs`: on cool-down, when heat protection is switched off, in `exit_app` (tray Exit and update install), and at
   start-up. Shutdown, a crash or a kill are covered only by the start-up restore.
 - **Sensors** (`sensors.rs`): the LibreHardwareMonitor sidecar `shimmy-sensors.exe` prints JSON rows every 2 s.
@@ -55,22 +62,33 @@ Recycle Bin route is `trash::delete_all`, used by `caches.rs`.
 - **DISM**: `clean::dism_analyze` and `dism_cleanup`, started from `start_dism` in `lib.rs`.
 - **Finder**: `finder::scan` returns `Found {large, installers, dups, ...}` (`Item {path, name, folder, bytes, modified}`).
   It is kept in `S.finder` and returned by `get_clean`. Deletes go through `finder_delete`: the gate is
-  `finder::allowed`, files bigger than `bin_capacity` return `needsConfirm`, and `allow_permanent` removes them.
+  `finder::allowed`, files bigger than `bin_capacity` return `needsConfirm`, and only the paths the page then sends back
+  in `confirmed` are removed.
 - **Biggest folders**: `storage::scan_usage` builds a `Tree` (after `start_usage_scan`), and `storage_folder` returns
   `Folder {path, bytes, filesHere, children}`, capped at 40 children. Folder deletes go through `folder_delete`, gated by
   `storage::check_folder`.
-- **System queries** use no WMI yet. Command-line tools run hidden through `clean::hidden(exe, args)`, or `clean::hidden_for` with a time limit for anything that can hang (winget) (powercfg,
-  vssadmin, dism). PowerShell runs only through `clean::powershell`, which stops it finding modules by name (it looks in the user's
-  Documents first). New files in a user folder go through `store::create_new` or `store::write_new`, never `fs::write`, which
-  follows a planted link. Shimmy runs as administrator, so it never runs anything a standard user can plant: winget is run
-  from its package folder (`programs::winget_exe`, not by name through PATH), and uninstallers only from HKLM (apps
-  installed just for the user open Windows' Installed apps page, `programs::per_user`).
+- **System queries**: the System page reads WMI through PowerShell (`hw.rs`); nothing else uses it, and there is no WMI
+  crate. Command-line tools run hidden through `clean::hidden(exe, args)` (vssadmin, for one), or `clean::hidden_for`
+  with a time limit for anything that can hang or runs in the tick (winget, powercfg in `heat.rs`). PowerShell runs only
+  through `clean::powershell`, which has a time limit too, and stops it finding modules by name (it looks in the user's
+  Documents first). New files in a user folder go through `store::create_new` or `store::write_new`, never `fs::write`,
+  which follows a planted link. Shimmy runs as administrator, so it never runs anything a standard user can plant: winget
+  is run from its package folder (`programs::winget_exe`, not by name through PATH), and uninstallers only from HKLM, and
+  only when their file and folder are an administrator's (`programs::trusted_uninstaller`). Apps installed just for the
+  user open Windows' Installed apps page (`programs::per_user`). `clear_webview_overrides` runs first in `main`, so
+  `WEBVIEW2_*` variables from the user's environment never reach the page.
 
-- **Premium P1/P2 modules**: `hw.rs` (System page), `power.rs` (power mode follows the charger, hand-linked powrprof
+- **Premium modules**: `hw.rs` (System page), `power.rs` (power mode follows the charger, hand-linked powrprof
   overlay calls), `cool.rs` (cooling check), `programs.rs` (installed apps, winget updates), `prio.rs` (background
-  priority), `net.rs` (Connections page), `senselog.rs` (sensor log), `report.rs` (`--report` and Save a report). Restore points: `clean::restore_point` via `Shared::restore_point_first`. CSV: `store::csv_row`, `export_csv`.
-  Everything Shimmy changes is put back in `exit_app` (boost, power mode, priorities).
-- **Data folder**: `data_dir` in `lib.rs`; `update::protected_folder` makes it admins-only. Not elevated, it stays in `%APPDATA%`.
+  priority); P3: `net.rs` (Connections page), `senselog.rs` (sensor log), `report.rs` (`--report` and Save a report). Restore points: `clean::restore_point` via `Shared::restore_point_first`. CSV: `store::csv_row`, `export_csv`.
+  Everything Shimmy changes is put back in `exit_app` (boost, power mode, priorities, and a Run from the charger hold,
+  which the first tick of the next start sets again). Your own charge limit stays in the firmware until uninstall, when
+  `--reset-limit` puts it back to 100 %. A crash, a kill or a shutdown skip `exit_app`, so boost and power mode are also
+  restored at start-up.
+- **Data folder**: `data_dir` in `lib.rs`; `update::protected_folder` makes it admins-only, trying ProgramData and then
+  Program Files. Not elevated, or if both fail, it stays in `%APPDATA%`. Settings copied in from there start with the
+  unattended work off (`calm_imported`). `settings.json` is replaced in one step (`store::write_atomic`), and one bad value
+  costs only itself (`load_settings`).
 - **Dev testing**: the dev build's settings are real and act on this PC: with `power.follow` on it changes the power mode,
   and killing it does not put that back. On Home, the Clean now button sits at about y 808 to 915 in `shoot.ps1`
   coordinates, and a first click can be lost, so never aim a blind click there.
@@ -91,6 +109,6 @@ and is not the app version.
 
 ## Tests
 
-Run them in `app/src-tauri`: `SHIMMY_NO_ADMIN=1 CARGO_TARGET_DIR=target-dev cargo test`. That is 120 unit tests, plus 2 in
+Run them in `app/src-tauri`: `SHIMMY_NO_ADMIN=1 CARGO_TARGET_DIR=target-dev cargo test`. That is 136 unit tests, plus 2 in
 `tests/parity.rs`. The real-PC checks are `--test real_scan -- --ignored`. Every new gate or decision function gets unit
 tests in the same style.

@@ -21,22 +21,24 @@ Home (four readouts and Clean now) · Memory · Processor · Graphics · Storage
 | `caches.rs` | Old caches on the Storage page (age filter, Recycle Bin, skipped while the app runs) |
 | `gpu.rs` | Graphics page, any vendor: Windows' GPU Engine counters (every adapter, per engine and per app), the graphics kernel's D3DKMT readout (temperature, clocks, fan, power share; a sleeping dedicated card is never asked) and NVML for NVIDIA detail (only while a page asks), merged per adapter |
 | `storage.rs`, `clean.rs`, `finder.rs`, `jobs.rs` | Storage page, safe clean and DISM, big and duplicate finder with its deletion gate, background jobs |
-| `update.rs` | Updates page: reads GitHub's latest release, downloads `Shimmy-Optimizer-Setup.exe` to `%ProgramData%\Shimmy Optimizer\updates` (administrators-only), checks its SHA-256, starts it. The only network use in Shimmy, all in Rust |
+| `update.rs` | Updates page: reads GitHub's latest release, downloads `Shimmy-Optimizer-Setup.exe` to `%ProgramData%\Shimmy Optimizer\updates` (administrators-only; Program Files if something got to that folder first), checks its SHA-256, starts it. The only network use in Shimmy, all in Rust |
 | `heat.rs` | Heat protection: processor boost off at 90 °C, back on at 75 °C, through powercfg; saved and restored |
 | `hold.rs` | Run from the charger: hold level, plug-in re-hold, override and drain warnings |
 | `battery.rs`, `asus.rs` | Battery page; ASUS ATK (`\\.\ATKACPI`) for fans and the charge limit |
 | `auto.rs` | Alerts, automatic memory clean, weekly clean: pure decision functions, unit-tested |
 | `autostart.rs` | The "Shimmy Optimizer" Task Scheduler task (highest privileges, runs on battery, `--tray`) |
+| `hw.rs`, `power.rs`, `cool.rs` | System page's hardware list; power mode follows the charger; cooling check |
+| `programs.rs`, `prio.rs` | Programs page (installed apps, winget updates); background priority |
 | `net.rs`, `senselog.rs`, `report.rs` | Connections page (read only); sensor log to CSV; the `--report` one-page summary |
 | `store.rs`, `startup.rs`, `tray.rs` | History and CSV log; startup entries; the live RAM ring tray icon |
-| `installer-hooks.nsh` | NSIS: installs PawnIO silently, then `shimmy-optimizer.exe --autostart on`; uninstall runs `--autostart off` |
+| `installer-hooks.nsh` | NSIS: installs PawnIO silently, then `shimmy-optimizer.exe --autostart on`; uninstall runs `--autostart off` and `--reset-limit` |
 | `design/icon.svg` | Icon master (lime ring and sparkle on a near-black tile); `tauri icon` makes the set |
 | `tools/shoot.ps1` | Launches a build and screenshots it, with clicks and mouse-wheel scrolling |
 | `spike/` | Phase 0 experiments, kept for reference |
 
 Processor use is refreshed only by the 3 s sampler (`Shared.cpu_live`); everything else reads that.
 
-Data lives in `%ProgramData%\Shimmy Optimizer\com.shimmy.optimizer\` (administrators only): `settings.json`, `history.json`, `cpu-history.json`, `actions-log.csv`. It is copied once from the old `%APPDATA%` folder. A build that is not elevated (a dev build) keeps it in `%APPDATA%`.
+Data lives in `%ProgramData%\Shimmy Optimizer\com.shimmy.optimizer\` (administrators only): `settings.json`, `history.json`, `cpu-history.json`, `actions-log.csv`. It is copied once from the old `%APPDATA%` folder, with the weekly clean, the automatic memory clean and extra search folders turned off, because any program could have written that copy. If ProgramData cannot be used it goes in `%ProgramFiles%\Shimmy Optimizer Data`. A build that is not elevated (a dev build) keeps it in `%APPDATA%`.
 
 ## Building
 - **Installer:** `cd app` then `CARGO_TARGET_DIR=target-ship npx tauri build` (the Tauri CLI resolves the folder from `src-tauri`, so
@@ -46,13 +48,13 @@ Data lives in `%ProgramData%\Shimmy Optimizer\com.shimmy.optimizer\` (administra
   `releases/latest/download/Shimmy-Optimizer-Setup.exe`, so any other name breaks them.
 - **Dev build:** `SHIMMY_NO_ADMIN=1 CARGO_TARGET_DIR=src-tauri/target-dev npx tauri build --no-bundle --config '{"identifier":"com.shimmy.optimizer.dev"}'`.
   It has no admin manifest and its own data folder, so it runs beside the real Shimmy. It has no CPU temperature, and Start with Windows is refused.
-- **Tests:** in `app/src-tauri`, `SHIMMY_NO_ADMIN=1 CARGO_TARGET_DIR=target-dev cargo test` (122 tests). Real-PC checks: add `--test real_scan -- --ignored`. They read only, except `set_limit`, which
+- **Tests:** in `app/src-tauri`, `SHIMMY_NO_ADMIN=1 CARGO_TARGET_DIR=target-dev cargo test` (138 tests). Real-PC checks: add `--test real_scan -- --ignored`. They read only, except `set_limit`, which
   writes the charge limit and runs only when `SHIMMY_LIMIT` is set.
 - The frontend is embedded in the exe, so UI changes need a rebuild. An elevated Shimmy that is running locks its exe: quit it from the tray first.
 
 ## Safety rules (do not loosen)
-- `classify()` in Rust is the only gate for closing processes. It protects system processes, services (session 0), security software, Claude, terminals, editors, Salon Shaila, and Shimmy with its WebView.
-- File deletes go to the Recycle Bin. Anything too big for the bin needs a second confirmation. `finder::allowed` re-checks every path against these rules: scanned roots, code projects, Salon Shaila and invoices, hidden or system files, the Keep list, the user's exclusions.
+- `classify()` in Rust is the only gate for closing processes. It protects system processes, services (session 0), security software, Claude, terminals, creative and code editors, Salon Shaila, and Shimmy with its WebView.
+- File deletes go to the Recycle Bin, apart from Clean's regrowing caches. Anything too big for the bin needs a second confirmation, or stays when no one can be asked. `finder::allowed` re-checks every path against these rules: scanned roots, code projects, Salon Shaila and invoices, hidden or system files, the Keep list, the user's exclusions. Every delete first checks the path really is where it says, with no link on the way (`store::really_at`, `store::delete_exact`).
 - Everything destructive or automatic is logged to `actions-log.csv`.
 - Shimmy is administrator, so it never loads or writes through anything a standard user controls: PowerShell only through `clean::powershell`, new files in user folders only through `store::create_new`, its data only in the protected folder.
 

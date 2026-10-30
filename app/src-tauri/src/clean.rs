@@ -10,6 +10,7 @@ use std::io::Read;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use windows::core::{w, PCWSTR};
 use windows::Win32::System::Services::{
@@ -97,11 +98,19 @@ pub fn known(var: &str) -> Option<PathBuf> {
   let p = unsafe { SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None) }.ok()?;
   let s = unsafe { p.to_string() };
   unsafe { CoTaskMemFree(Some(p.0 as _)) };
-  s.ok().map(PathBuf::from).filter(|p| p.is_absolute() && p.parent().is_some())
+  let found = s.ok().map(PathBuf::from).filter(|p| p.is_absolute() && p.parent().is_some())?;
+  // These two come from the user's own registry, which any program can write, and they are what Clean deletes in. The
+  // profile folder comes from the machine's, so they must sit inside it.
+  if matches!(var, "LOCALAPPDATA" | "APPDATA") && !found.starts_with(known("USERPROFILE")?) {
+    return None;
+  }
+  Some(found)
 }
 
 /// Folder to clean, with a minimum file age and an optional file-name filter.
 struct Target {
+  /// The known folder it is under. Every folder between here and `dir` must be real (`store::really_at`).
+  base: PathBuf,
   dir: PathBuf,
   min_age: Duration,
   recursive: bool,
@@ -109,7 +118,7 @@ struct Target {
 }
 
 fn dir(p: PathBuf) -> Target {
-  Target { dir: p, min_age: Duration::ZERO, recursive: true, only: None }
+  Target { base: PathBuf::new(), dir: p, min_age: Duration::ZERO, recursive: true, only: None }
 }
 
 fn browser(id: &str) -> Option<(&'static str, PathBuf)> {
@@ -127,7 +136,8 @@ fn targets(id: &str) -> Vec<Target> {
   let (Some(local), Some(windows), Some(program_data), Some(roaming)) = (known("LOCALAPPDATA"), known("SystemRoot"), known("ProgramData"), known("APPDATA")) else {
     return Vec::new();
   };
-  match id {
+  let bases = [local.clone(), windows.clone(), program_data.clone(), roaming.clone()];
+  let mut out = match id {
     // The standard per-user temp folder, not %TEMP% (see `known`).
     "user-temp" => vec![Target { min_age: day, ..dir(local.join("Temp")) }],
     "win-temp" => vec![Target { min_age: day, ..dir(windows.join("Temp")) }],
@@ -173,7 +183,17 @@ fn targets(id: &str) -> Vec<Target> {
       }
       None => vec![],
     },
-  }
+  };
+  // Shimmy is administrator, and a standard program can replace a folder in the user's own AppData with a link to
+  // anywhere. Only `files` looks inside a target, and it skips links below it, so a target that is not real goes here.
+  out.retain_mut(|t| match bases.iter().find(|b| t.dir.starts_with(b)) {
+    Some(b) if crate::store::really_at(b, &t.dir) => {
+      t.base = b.clone();
+      true
+    }
+    _ => false,
+  });
+  out
 }
 
 /// An app's jump list, but never File Explorer's own (f01b4d95cf55d32a), which holds the Quick access pins.
@@ -253,22 +273,16 @@ pub fn scan(running: &HashSet<String>, progress: &Progress) -> Vec<CatScan> {
     .collect()
 }
 
-fn delete_files(list: &[(PathBuf, u64)]) -> (u64, u64, u64) {
+/// The known folder a listed file is checked against: the one its target is under.
+fn base_of<'a>(ts: &'a [Target], path: &Path) -> Option<&'a Path> {
+  ts.iter().find(|t| path.starts_with(&t.dir)).map(|t| t.base.as_path())
+}
+
+/// Files in use, and any that a link swapped in since the scan now leads away from, stay and are counted as skipped.
+fn delete_files(ts: &[Target], list: &[(PathBuf, u64)]) -> (u64, u64, u64) {
   let (mut freed, mut done, mut skipped) = (0, 0, 0);
   for (path, bytes) in list {
-    let mut ok = fs::remove_file(path).is_ok();
-    if !ok {
-      // Read-only files need the flag cleared first; files in use stay and are counted as skipped.
-      if let Ok(md) = fs::metadata(path) {
-        let mut perm = md.permissions();
-        if perm.readonly() {
-          #[allow(clippy::permissions_set_readonly_false)]
-          perm.set_readonly(false);
-          ok = fs::set_permissions(path, perm).is_ok() && fs::remove_file(path).is_ok();
-        }
-      }
-    }
-    if ok {
+    if base_of(ts, path).is_some_and(|b| crate::store::delete_exact(b, path)) {
       freed += bytes;
       done += 1;
     } else {
@@ -278,11 +292,13 @@ fn delete_files(list: &[(PathBuf, u64)]) -> (u64, u64, u64) {
   (freed, done, skipped)
 }
 
-/// Like `delete_files`, but to the Recycle Bin, one file at a time so a file in use only skips itself.
-fn recycle_files(list: &[(PathBuf, u64)]) -> (u64, u64, u64) {
+/// Like `delete_files`, but to the Recycle Bin, one file at a time so a file in use only skips itself. What is too big
+/// for the bin, or everything when the bin is off, stays: Windows would delete it for good with nobody asked.
+fn recycle_files(ts: &[Target], list: &[(PathBuf, u64)]) -> (u64, u64, u64) {
   let (mut freed, mut done, mut skipped) = (0, 0, 0);
+  let room = list.first().map_or(0, |(p, _)| crate::finder::bin_capacity(p));
   for (path, bytes) in list {
-    if trash::delete(path).is_ok() {
+    if *bytes <= room && base_of(ts, path).is_some_and(|b| crate::store::really_at(b, path)) && trash::delete(path).is_ok() {
       freed += bytes;
       done += 1;
     } else {
@@ -319,29 +335,43 @@ pub fn ps_script(modules: &[&str], script: &str) -> String {
 /// Documents folder first, which any program can write to, so nothing may be found by name: a planted module of the same
 /// name would run as administrator. Only ever run scripts through here.
 pub fn powershell(modules: &[&str], script: &str) -> std::io::Result<std::process::Output> {
+  // A stuck WMI query must not leave a page or `--report` waiting for good.
+  const LIMIT: Duration = Duration::from_secs(120);
   let not_found = || std::io::Error::new(std::io::ErrorKind::NotFound, "Windows' folder is not known");
   let home = known("SystemRoot").ok_or_else(not_found)?.join(r"System32\WindowsPowerShell\v1.0");
-  Command::new(home.join("powershell.exe"))
-    .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", &ps_script(modules, script)])
-    .env("PSModulePath", home.join("Modules"))
-    .stdin(Stdio::null())
-    .creation_flags(CREATE_NO_WINDOW)
-    .output()
+  let mut cmd = Command::new(home.join("powershell.exe"));
+  cmd.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", &ps_script(modules, script)]).env("PSModulePath", home.join("Modules"));
+  limited(cmd, "PowerShell", LIMIT)
 }
 
 /// Like `hidden`, but the program is killed after `limit`, with a TimedOut error: for tools that can hang on the
 /// network or a prompt (winget), so a job never stays "running" for good.
 pub fn hidden_for(cmd: &str, args: &[&str], limit: Duration) -> std::io::Result<std::process::Output> {
-  let mut child = Command::new(cmd).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).creation_flags(CREATE_NO_WINDOW).spawn()?;
+  let mut c = Command::new(cmd);
+  c.args(args);
+  limited(c, cmd, limit)
+}
+
+fn limited(mut cmd: Command, what: &str, limit: Duration) -> std::io::Result<std::process::Output> {
+  // How long to wait for the pipes once the program itself has ended: something it started can hold them open for good.
+  const PIPE_WAIT: Duration = Duration::from_secs(5);
+  let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).creation_flags(CREATE_NO_WINDOW).spawn()?;
   // Read both pipes on their own threads, so a chatty program cannot block on a full pipe while we wait.
   let drain = |p: Option<Box<dyn Read + Send>>| {
-    std::thread::spawn(move || {
-      let mut buf = Vec::new();
+    let buf = Arc::new(Mutex::new(Vec::new()));
+    let keep = buf.clone();
+    let reader = std::thread::spawn(move || {
+      let mut chunk = [0u8; 8192];
       if let Some(mut p) = p {
-        let _ = p.read_to_end(&mut buf);
+        while let Ok(n) = p.read(&mut chunk) {
+          if n == 0 {
+            break;
+          }
+          keep.lock().unwrap().extend_from_slice(&chunk[..n]);
+        }
       }
-      buf
-    })
+    });
+    (reader, buf)
   };
   let out = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
   let err = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
@@ -353,11 +383,16 @@ pub fn hidden_for(cmd: &str, args: &[&str], limit: Duration) -> std::io::Result<
     if started.elapsed() >= limit {
       let _ = child.kill();
       let _ = child.wait();
-      return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, format!("{cmd} took longer than {} minutes and was stopped", limit.as_secs() / 60)));
+      return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, format!("{what} took longer than {} seconds and was stopped", limit.as_secs())));
     }
-    std::thread::sleep(Duration::from_millis(200));
+    std::thread::sleep(Duration::from_millis(50));
   };
-  Ok(std::process::Output { status, stdout: out.join().unwrap_or_default(), stderr: err.join().unwrap_or_default() })
+  let ended = std::time::Instant::now();
+  while !(out.0.is_finished() && err.0.is_finished()) && ended.elapsed() < PIPE_WAIT {
+    std::thread::sleep(Duration::from_millis(20));
+  }
+  let take = |b: &Arc<Mutex<Vec<u8>>>| std::mem::take(&mut *b.lock().unwrap());
+  Ok(std::process::Output { status, stdout: take(&out.1), stderr: take(&err.1) })
 }
 
 /// Closes a service or Service Control Manager handle when it goes out of scope.
@@ -430,7 +465,7 @@ pub fn run(ids: &[String], running: &HashSet<String>, progress: &Progress) -> Ve
         let ts = targets(d.id);
         let mut list = Vec::new();
         ts.iter().for_each(|t| files(t, &mut list));
-        let (freed, done, skipped) = if d.id == "recent" { recycle_files(&list) } else { delete_files(&list) };
+        let (freed, done, skipped) = if d.id == "recent" { recycle_files(&ts, &list) } else { delete_files(&ts, &list) };
         for t in ts.iter().filter(|t| t.recursive && t.min_age.is_zero()) {
           prune_empty(&t.dir);
         }

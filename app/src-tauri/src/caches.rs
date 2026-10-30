@@ -61,8 +61,10 @@ pub fn is_cache(id: &str) -> bool {
   DEFS.iter().any(|d| d.id == id)
 }
 
-fn dirs(d: &Def) -> Vec<PathBuf> {
-  d.dirs.iter().filter_map(|(var, rel)| crate::clean::known(var).map(|b| b.join(rel))).filter(|p| p.is_dir()).collect()
+/// Each cache's folder and the known folder it is under. A folder that is really a link somewhere else is left out: any
+/// program the user runs can replace one, and Shimmy is administrator.
+fn dirs(d: &Def) -> Vec<(PathBuf, PathBuf)> {
+  d.dirs.iter().filter_map(|(var, rel)| crate::clean::known(var).map(|b| (b.join(rel), b))).filter(|(p, b)| p.is_dir() && crate::store::really_at(b, p)).map(|(p, b)| (b, p)).collect()
 }
 
 fn blocked(d: &Def, running: &HashSet<String>) -> Option<String> {
@@ -165,7 +167,7 @@ pub fn scan(prefs: &CachePrefs, running: &HashSet<String>, progress: &Progress) 
       }
       progress.set(format!("Measuring the {}", d.title.to_lowercase()));
       let (mut total, mut old, mut old_files) = (0, 0, 0);
-      for dir in &ds {
+      for (_, dir) in &ds {
         total += total_size(dir);
         let (_, b, f, _) = plan(dir, cut);
         old += b;
@@ -173,7 +175,7 @@ pub fn scan(prefs: &CachePrefs, running: &HashSet<String>, progress: &Progress) 
       }
       Some(CacheScan {
         id: d.id, family: d.family, title: d.title, why: d.why, default_on: d.default_on, total, old, old_files,
-        blocked: blocked(d, running), folders: ds.iter().map(|p| p.to_string_lossy().into_owned()).collect(),
+        blocked: blocked(d, running), folders: ds.iter().map(|(_, p)| p.to_string_lossy().into_owned()).collect(),
       })
     })
     .filter(|c| c.total > 0)
@@ -191,32 +193,63 @@ pub fn run(ids: &[String], prefs: &CachePrefs, running: &HashSet<String>, progre
       continue;
     }
     progress.set(format!("Moving the old {} to the Recycle Bin", d.title.to_lowercase()));
-    let (mut recycled, mut files, mut failed) = (0, 0, 0);
-    for dir in dirs(d) {
-      let (mut items, b, f, all) = plan(&dir, cut);
+    let (mut recycled, mut files, mut failed, mut too_big) = (0, 0, 0, 0);
+    for (base, dir) in dirs(d) {
+      let (mut items, _, _, all) = plan(&dir, cut);
       if all {
         // Everything is old: recycle what is inside, keep the cache folder itself.
         items = fs::read_dir(&dir).into_iter().flatten().flatten().map(|e| e.path()).collect();
       }
-      if items.is_empty() {
-        continue;
+      // Anything too big for the bin stays (all of it when the bin is off): Windows would delete it for good, and a
+      // background clean cannot ask first.
+      let room = crate::finder::bin_capacity(&dir);
+      let (mut go, mut sizes) = (Vec::new(), Vec::new());
+      for p in items {
+        let size = measure(&p);
+        if size.0 > room {
+          too_big += 1;
+        } else if crate::store::really_at(&base, &p) {
+          go.push(p);
+          sizes.push(size);
+        }
       }
       // One shell operation per batch keeps it fast; a failed batch is retried item by item.
-      for chunk in items.chunks(500) {
+      for chunk in go.chunks(500) {
         if trash::delete_all(chunk).is_err() {
           for p in chunk {
-            if trash::delete(p).is_err() {
-              failed += 1;
-            }
+            let _ = trash::delete(p);
           }
         }
       }
-      recycled += b;
-      files += f;
+      // Only what really left is counted: a batch can fail after moving some of its items.
+      for (p, (b, f)) in go.iter().zip(sizes) {
+        if p.exists() {
+          failed += 1;
+        } else {
+          recycled += b;
+          files += f;
+        }
+      }
     }
-    out.push(r(recycled, files, (failed > 0).then(|| format!("{failed} items were in use and left in place."))));
+    let mut notes = Vec::new();
+    if failed > 0 {
+      notes.push(format!("{failed} items were in use and left in place."));
+    }
+    if too_big > 0 {
+      notes.push(format!("{too_big} items were too big for the Recycle Bin, or it is turned off, and were left in place."));
+    }
+    out.push(r(recycled, files, (!notes.is_empty()).then(|| notes.join(" "))));
   }
   out
+}
+
+/// Bytes and files in one item of a plan.
+fn measure(p: &Path) -> (u64, u64) {
+  let Ok(md) = fs::symlink_metadata(p) else { return (0, 0) };
+  if !md.is_dir() {
+    return (md.len(), 1);
+  }
+  fs::read_dir(p).into_iter().flatten().flatten().map(|e| measure(&e.path())).fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1))
 }
 
 #[cfg(test)]
@@ -244,6 +277,9 @@ mod tests {
     assert!(items.contains(&mixed.join("c")));
     assert!(!items.contains(&mixed.join("new")), "recent files stay");
     assert_eq!(items.len(), 2);
+    assert_eq!(measure(&old), (10, 2));
+    assert_eq!(measure(&mixed.join("c")), (5, 1));
+    assert_eq!(measure(&base.join("nothing")), (0, 0));
     let _ = fs::remove_dir_all(&base);
   }
 }

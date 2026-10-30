@@ -93,9 +93,11 @@ pub fn text(s: &Snapshot) -> String {
   }
   if let Some(c) = &s.conns {
     let on_net = c.iter().filter(|x| x.place == Some(Place::Internet) && x.state == "Connected").count();
-    let waits = c.iter().filter(|x| x.state == "Listening" && x.place.is_none()).count();
+    let waits = c.iter().filter(|x| x.state == "Listening").count();
+    let here = c.iter().filter(|x| x.state == "Listening" && x.place == Some(Place::ThisPc)).count();
     let s_of = |n: usize| if n == 1 { "" } else { "s" };
-    add("Network", format!("{on_net} connection{} to the internet, {waits} port{} listening", s_of(on_net), s_of(waits)));
+    let only_here = if here > 0 { format!(" ({here} for this PC only)") } else { String::new() };
+    add("Network", format!("{on_net} connection{} to the internet, {waits} port{} listening{only_here}", s_of(on_net), s_of(waits)));
   }
   let top = top_apps(&s.procs, 5);
   if !top.is_empty() {
@@ -104,7 +106,12 @@ pub fn text(s: &Snapshot) -> String {
     out.extend(top.iter().map(|(name, ws)| format!("  {:<32}{}", name, gb(*ws))));
   }
   out.push(String::new());
-  out.join("\r\n")
+  ascii(&out.join("\r\n"))
+}
+
+/// App and hardware names can hold anything, so what the console could garble becomes a question mark.
+fn ascii(s: &str) -> String {
+  s.chars().map(|c| if c.is_ascii() { c } else { '?' }).collect()
 }
 
 /// Whether anything is listening to stdout. Shimmy is a windowed program, so it has no console of its own: a redirect or
@@ -122,11 +129,22 @@ fn can_print() -> bool {
 
 /// Saves the report as a text file and shows it: `dir` is Downloads.
 pub fn save(dir: &std::path::Path, stamp: &str, text: &str) -> Result<(String, std::path::PathBuf), String> {
-  let name = format!("Shimmy report {stamp}.txt");
-  let file = dir.join(&name);
-  crate::store::write_new(dir, &name, text.as_bytes()).map_err(|e| format!("Could not save it to Downloads: {e}"))?;
+  let (name, file) = write_report(dir, stamp, text)?;
   let _ = std::process::Command::new("explorer.exe").arg(format!("/select,{}", file.display())).spawn();
   Ok((name, file))
+}
+
+/// A second save within the same second gets its own file instead of an error.
+fn write_report(dir: &std::path::Path, stamp: &str, text: &str) -> Result<(String, std::path::PathBuf), String> {
+  for n in 1..=20 {
+    let name = if n == 1 { format!("Shimmy report {stamp}.txt") } else { format!("Shimmy report {stamp} ({n}).txt") };
+    match crate::store::write_new(dir, &name, text.as_bytes()) {
+      Ok(()) => return Ok((name.clone(), dir.join(name))),
+      Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+      Err(e) => return Err(format!("Could not save it to Downloads: {e}")),
+    }
+  }
+  Err("Could not save it to Downloads: too many reports with that time.".into())
 }
 
 /// `--report`: Shimmy need not be running, so this reads everything itself, then prints, or saves when it cannot print.
@@ -239,5 +257,29 @@ mod tests {
     assert!(t.contains("chrome.exe"));
     assert!(!t.contains("8.8.8.8") && !t.contains("192.168"), "addresses stay out");
     assert!(t.lines().count() < 40);
+  }
+
+  #[test]
+  fn the_report_stays_ascii_and_counts_every_listener() {
+    let mut s = snap();
+    s.procs = vec![proc("café.exe", 1_073_741_824)];
+    let listen = |place| net::Conn { proto: "TCP", pid: 1, local: "127.0.0.1".into(), local_port: 5, remote: None, remote_port: None, place, state: "Listening" };
+    s.conns = Some(vec![listen(None), listen(Some(Place::ThisPc))]);
+    let t = text(&s);
+    assert!(t.is_ascii());
+    assert!(t.contains("caf?.exe"));
+    assert!(t.contains("2 ports listening (1 for this PC only)"), "{t}");
+  }
+
+  #[test]
+  fn two_reports_in_one_second_both_save() {
+    let d = std::env::temp_dir().join(format!("shimmy-report-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    let (first, _) = write_report(&d, "2026-10-30 10.00.00", "a").unwrap();
+    let (second, _) = write_report(&d, "2026-10-30 10.00.00", "b").unwrap();
+    assert_ne!(first, second);
+    assert_eq!(std::fs::read(d.join(&second)).unwrap(), b"b");
+    let _ = std::fs::remove_dir_all(&d);
   }
 }

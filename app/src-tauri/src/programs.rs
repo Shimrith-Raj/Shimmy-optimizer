@@ -3,6 +3,7 @@
 //! Shimmy listed itself; the command that runs is read here, never taken from the page.
 use regex::Regex;
 use serde::Serialize;
+use std::path::PathBuf;
 use std::sync::LazyLock;
 use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_32KEY, KEY_WOW64_64KEY};
 use winreg::RegKey;
@@ -91,14 +92,32 @@ pub fn split_command(s: &str) -> Option<(String, String)> {
     let end = rest.find('"')?;
     return Some((rest[..end].to_string(), rest[end + 1..].trim().to_string()));
   }
-  let end = s.to_ascii_lowercase().find(".exe")? + 4;
-  Some((s[..end].to_string(), s[end..].trim().to_string()))
+  let lower = s.to_ascii_lowercase();
+  match lower.find(".exe") {
+    Some(i) => Some((s[..i + 4].to_string(), s[i + 4..].trim().to_string())),
+    // Windows Installer is often listed with no extension: `msiexec /x{code}`.
+    None => {
+      let (first, rest) = s.split_once(char::is_whitespace).unwrap_or((s, ""));
+      first.eq_ignore_ascii_case("msiexec").then(|| ("msiexec.exe".to_string(), rest.trim().to_string()))
+    }
+  }
 }
 
 /// Windows Installer apps often list `msiexec /I{code}`, which opens the repair screen; /X is the uninstall.
 pub fn msi_uninstall(exe: &str, args: &str) -> String {
   let is_msi = exe.to_ascii_lowercase().trim_end_matches(".exe").ends_with("msiexec");
-  if is_msi { args.replacen("/I{", "/X{", 1).replacen("/i{", "/X{", 1) } else { args.to_string() }
+  if !is_msi {
+    return args.to_string();
+  }
+  ["/I{", "/i{", "/I {", "/i {"].iter().fold(args.to_string(), |a, from| a.replacen(from, "/X{", 1))
+}
+
+/// The full path of an uninstaller when Shimmy may start it. A bare name is Windows' own (msiexec) and is looked for only
+/// in System32, never along PATH. None when its file or folder is not an administrator's.
+pub fn trusted_uninstaller(exe: &str) -> Option<PathBuf> {
+  let p = PathBuf::from(exe);
+  let full = if p.is_absolute() { p } else { crate::clean::known("SystemRoot")?.join("System32").join(p) };
+  crate::update::trusted_program(&full).then_some(full)
 }
 
 /// Apps installed just for this user are listed under HKCU, which any program the user runs can write. Shimmy runs as
@@ -269,6 +288,13 @@ The following packages have an upgrade available, but require explicit targeting
     assert_eq!(msi_uninstall("MsiExec.exe", "/I{1234-ABCD}"), "/X{1234-ABCD}");
     assert_eq!(msi_uninstall(r"C:\App\unins000.exe", "/I{x}"), "/I{x}", "only for Windows Installer");
     assert_eq!(split_command("no program here"), None);
+    assert_eq!(split_command("msiexec /x{1234-ABCD}"), Some(("msiexec.exe".into(), "/x{1234-ABCD}".into())), "Windows Installer with no extension");
+    assert_eq!(msi_uninstall("msiexec.exe", "/I {1234-ABCD}"), "/X{1234-ABCD}", "with a space too");
+    assert!(trusted_uninstaller("msiexec.exe").is_some_and(|p| p.is_absolute()), "a bare name is Windows' own, from System32");
+    let planted = std::env::temp_dir().join(format!("shimmy-uninstaller-{}.exe", std::process::id()));
+    std::fs::write(&planted, b"x").unwrap();
+    assert!(trusted_uninstaller(&planted.to_string_lossy()).is_none(), "a file a standard user owns, in a folder they can write");
+    let _ = std::fs::remove_file(&planted);
   }
 
   #[test]

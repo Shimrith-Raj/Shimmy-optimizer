@@ -69,9 +69,15 @@ pub fn export_row(fields: &[&str]) -> String {
   csv_row(&safe.iter().map(String::as_str).collect::<Vec<_>>())
 }
 
-/// Same file name as asked for. A link in the folder's path can send a new file somewhere else under another name.
-fn same_name(final_path: &str, name: &str) -> bool {
-  final_path.rsplit('\\').next().is_some_and(|n| n.eq_ignore_ascii_case(name))
+const DELETE: u32 = 0x0001_0000;
+const FILE_READ_ATTRIBUTES: u32 = 0x80;
+const FILE_WRITE_ATTRIBUTES: u32 = 0x100;
+const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+
+/// A path's text, the same whichever way Windows or Rust wrote it, for comparing.
+fn path_key(p: &str) -> String {
+  p.strip_prefix(r"\\?\").unwrap_or(p).trim_end_matches('\\').to_lowercase()
 }
 
 fn final_path(f: &fs::File) -> Option<String> {
@@ -82,29 +88,95 @@ fn final_path(f: &fs::File) -> Option<String> {
   (n > 0 && n < buf.len()).then(|| String::from_utf16_lossy(&buf[..n]))
 }
 
-/// A new file in a folder the user can write to, such as Downloads. Shimmy is administrator there, so it never opens
-/// what is already at that name: that could be a link to a system file. Refuses an existing file or link, and removes
-/// and refuses a file that a link in the folder's path sent somewhere else.
-pub fn create_new(dir: &Path, name: &str) -> std::io::Result<fs::File> {
+/// The folder's own long name, without following any link in it (8.3 names such as STUDIO~1 are spelled out).
+fn long_dir(dir: &Path) -> Option<String> {
+  use std::os::windows::ffi::OsStrExt;
+  use windows::core::PCWSTR;
+  use windows::Win32::Storage::FileSystem::GetLongPathNameW;
+  let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(Some(0)).collect();
+  let mut buf = vec![0u16; 4096];
+  let n = unsafe { GetLongPathNameW(PCWSTR(wide.as_ptr()), Some(&mut buf)) } as usize;
+  (n > 0 && n < buf.len()).then(|| String::from_utf16_lossy(&buf[..n]))
+}
+
+fn delete_on_close(f: &fs::File) -> bool {
   use windows::Win32::Foundation::HANDLE;
   use windows::Win32::Storage::FileSystem::{FileDispositionInfo, SetFileInformationByHandle, FILE_DISPOSITION_INFO};
+  let gone = FILE_DISPOSITION_INFO { DeleteFile: true.into() };
+  unsafe { SetFileInformationByHandle(HANDLE(f.as_raw_handle()), FileDispositionInfo, &gone as *const _ as *const _, std::mem::size_of_val(&gone) as u32).is_ok() }
+}
+
+/// A new file in a folder the user can write to, such as Downloads. Shimmy is administrator there, so it never opens
+/// what is already at that name: that could be a link to a system file. Refuses an existing file or link, and removes
+/// and refuses a file that a link anywhere in the folder's path sent somewhere else.
+pub fn create_new(dir: &Path, name: &str) -> std::io::Result<fs::File> {
   const GENERIC_WRITE: u32 = 0x4000_0000;
-  const DELETE: u32 = 0x0001_0000;
-  const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
   let f = fs::OpenOptions::new().write(true).create_new(true).access_mode(GENERIC_WRITE | DELETE).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT).open(dir.join(name))?;
-  if final_path(&f).is_some_and(|p| same_name(&p, name)) {
+  let wanted = long_dir(dir).map(|d| path_key(&format!("{}\\{name}", d.trim_end_matches('\\'))));
+  if wanted.is_some() && final_path(&f).map(|p| path_key(&p)) == wanted {
     return Ok(f);
   }
-  let gone = FILE_DISPOSITION_INFO { DeleteFile: true.into() };
-  unsafe {
-    let _ = SetFileInformationByHandle(HANDLE(f.as_raw_handle()), FileDispositionInfo, &gone as *const _ as *const _, std::mem::size_of_val(&gone) as u32);
-  }
+  discard(&f);
   Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "that folder leads somewhere else"))
+}
+
+/// Removes a file `create_new` made, through its handle.
+pub fn discard(f: &fs::File) {
+  delete_on_close(f);
 }
 
 /// `create_new`, then the whole content.
 pub fn write_new(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
   create_new(dir, name)?.write_all(bytes)
+}
+
+/// Opens what is at this exact path, a link itself rather than what it points to, when it really is below `anchor`: the
+/// path's text must be where Windows says the file is, so a link in any folder on the way, a `..` or an 8.3 name is
+/// refused. `anchor` is a folder Shimmy trusts, and may itself lead elsewhere (Downloads moved to D:).
+fn open_exact(anchor: &Path, path: &Path, access: u32) -> Option<fs::File> {
+  let rel = path.strip_prefix(anchor).ok()?;
+  if !rel.components().all(|c| matches!(c, std::path::Component::Normal(_))) {
+    return None;
+  }
+  let wanted = fs::canonicalize(anchor).ok()?.join(rel);
+  let f = fs::OpenOptions::new().access_mode(access).share_mode(7).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS).open(path).ok()?;
+  (final_path(&f).map(|p| path_key(&p)) == Some(path_key(&wanted.to_string_lossy()))).then_some(f)
+}
+
+/// Whether this exact file or folder is really below `anchor`, and is not itself a link. Cloud placeholders are fine.
+pub fn really_at(anchor: &Path, path: &Path) -> bool {
+  open_exact(anchor, path, FILE_READ_ATTRIBUTES).is_some_and(|f| f.metadata().is_ok_and(|m| !m.file_type().is_symlink()))
+}
+
+/// Deletes one file for good, through a handle that was checked with `open_exact`, so nothing can be swapped in between
+/// the check and the delete. A read-only file has the flag cleared first. False when it was refused or is in use.
+pub fn delete_exact(anchor: &Path, path: &Path) -> bool {
+  use windows::Win32::Foundation::HANDLE;
+  use windows::Win32::Storage::FileSystem::{FileBasicInfo, SetFileInformationByHandle, FILE_ATTRIBUTE_NORMAL, FILE_BASIC_INFO};
+  let Some(f) = open_exact(anchor, path, DELETE | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES) else { return false };
+  if !f.metadata().is_ok_and(|m| m.is_file()) {
+    return false;
+  }
+  if delete_on_close(&f) {
+    return true;
+  }
+  let plain = FILE_BASIC_INFO { FileAttributes: FILE_ATTRIBUTE_NORMAL.0, ..Default::default() };
+  let cleared = unsafe { SetFileInformationByHandle(HANDLE(f.as_raw_handle()), FileBasicInfo, &plain as *const _ as *const _, std::mem::size_of_val(&plain) as u32).is_ok() };
+  cleared && delete_on_close(&f)
+}
+
+/// Replaces a file in one step, so a crash or a full disk leaves the old copy and never half of a new one. The temporary
+/// file is new each time and never opened through something already there.
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+  let mut tmp = path.as_os_str().to_os_string();
+  tmp.push(".tmp");
+  let tmp = PathBuf::from(tmp);
+  let _ = fs::remove_file(&tmp);
+  let mut f = fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+  f.write_all(bytes)?;
+  f.sync_all()?;
+  drop(f);
+  fs::rename(&tmp, path)
 }
 
 /// A real file of a sensible size, not a link to one: what Shimmy may copy out of a folder the user can write to, as
@@ -264,10 +336,72 @@ mod tests {
     let _ = fs::remove_dir_all(&d);
   }
 
+  /// A folder junction, which any program can make without administrator rights.
+  fn junction(link: &Path, target: &Path) {
+    let ok = std::process::Command::new("cmd").args(["/c", "mklink", "/J"]).arg(link).arg(target).stdout(std::process::Stdio::null()).status().unwrap().success();
+    assert!(ok, "could not make a junction");
+  }
+
   #[test]
-  fn a_new_file_must_keep_its_name() {
-    assert!(same_name(r"\\?\C:\Users\x\Downloads\Shimmy Report.txt", "shimmy report.txt"));
-    assert!(!same_name(r"\\?\C:\Windows\System32\evil.dll", "Shimmy report.txt"));
+  fn paths_compare_however_they_are_written() {
+    assert_eq!(path_key(r"\\?\C:\Users\X\Report.txt"), path_key(r"c:\users\x\report.TXT"));
+    assert_ne!(path_key(r"\\?\C:\Windows\System32\Report.txt"), path_key(r"C:\Users\x\Downloads\Report.txt"));
+  }
+
+  #[test]
+  fn a_link_in_the_folder_cannot_send_a_new_file_elsewhere() {
+    let (base, away) = (scratch("link-base"), scratch("link-away"));
+    let link = base.join("Downloads");
+    junction(&link, &away);
+    assert!(write_new(&link, "report.txt", b"x").is_err(), "the junction is refused");
+    assert!(!away.join("report.txt").exists(), "and the stray file is removed");
+    write_new(&base, "here.txt", b"x").unwrap();
+    let _ = (fs::remove_dir(&link), fs::remove_dir_all(&base), fs::remove_dir_all(&away));
+  }
+
+  #[test]
+  fn the_exact_path_gate_sees_through_links() {
+    let (base, away) = (scratch("exact-base"), scratch("exact-away"));
+    fs::create_dir_all(base.join("real")).unwrap();
+    fs::write(base.join("real").join("a.txt"), b"x").unwrap();
+    fs::write(away.join("victim.txt"), b"precious").unwrap();
+    junction(&base.join("link"), &away);
+    assert!(really_at(&base, &base.join("real")));
+    assert!(really_at(&base, &base.join("real").join("a.txt")));
+    assert!(!really_at(&base, &base.join("link")), "a link at the end");
+    assert!(!really_at(&base, &base.join("link").join("victim.txt")), "a link on the way");
+    assert!(!really_at(&base, &base.join("real").join("..").join("real").join("a.txt")), "a .. in the path");
+    assert!(!really_at(&base, &base.join("nothing")));
+    assert!(!delete_exact(&base, &base.join("link").join("victim.txt")));
+    assert_eq!(fs::read(away.join("victim.txt")).unwrap(), b"precious");
+    assert!(really_at(&away, &away.join("victim.txt")), "the same file is fine from its own folder");
+    let _ = (fs::remove_dir(base.join("link")), fs::remove_dir_all(&base), fs::remove_dir_all(&away));
+  }
+
+  #[test]
+  fn delete_exact_removes_plain_and_read_only_files() {
+    let d = scratch("delete");
+    let (a, b) = (d.join("a.txt"), d.join("b.txt"));
+    fs::write(&a, b"x").unwrap();
+    fs::write(&b, b"x").unwrap();
+    let mut ro = fs::metadata(&b).unwrap().permissions();
+    ro.set_readonly(true);
+    fs::set_permissions(&b, ro).unwrap();
+    assert!(delete_exact(&d, &a) && !a.exists());
+    assert!(delete_exact(&d, &b) && !b.exists());
+    assert!(!delete_exact(&d, &d), "a folder is not deleted this way");
+    let _ = fs::remove_dir_all(&d);
+  }
+
+  #[test]
+  fn atomic_writes_replace_the_old_file() {
+    let d = scratch("atomic");
+    let f = d.join("settings.json");
+    write_atomic(&f, b"one").unwrap();
+    write_atomic(&f, b"two").unwrap();
+    assert_eq!(fs::read(&f).unwrap(), b"two");
+    assert!(!d.join("settings.json.tmp").exists());
+    let _ = fs::remove_dir_all(&d);
   }
 
   #[test]

@@ -803,10 +803,10 @@ function confirmDelete(paths) {
   $('#mOk').onclick = () => doDelete(paths, false);
 }
 
-async function doDelete(paths, allowPermanent) {
+async function doDelete(paths, confirmed = []) {
   $('#mOk').disabled = true; $('#mOk').textContent = 'Working';
   try {
-    const r = await api('/api/finder/delete', { paths, allowPermanent });
+    const r = await api('/api/finder/delete', { paths, confirmed });
     if (r.needsConfirm) {
       const big = r.needsConfirm;
       const fits = paths.filter((p) => !big.some((b) => b.path === p));
@@ -814,8 +814,8 @@ async function doDelete(paths, allowPermanent) {
         <div class="warn-box">Windows would delete ${big.length === 1 ? 'it' : 'them'} <b>permanently</b>, with no way to restore from the Recycle Bin. ${RP_NOTE}</div>
         <div class="plist">${big.map((b) => `<div><span>${esc(b.path.split('\\').pop())}</span><span>${fmtB(b.bytes)}</span></div>`).join('')}</div>
         <div class="modal-actions"><button class="btn ghost" id="mSkip">${fits.length ? 'Skip these, recycle the rest' : 'Cancel'}</button><button class="btn danger" id="mOk">Delete permanently</button></div>`;
-      $('#mSkip').onclick = () => (fits.length ? doDelete(fits, false) : $('#modal').close());
-      $('#mOk').onclick = () => doDelete(paths, true);
+      $('#mSkip').onclick = () => (fits.length ? doDelete(fits) : $('#modal').close());
+      $('#mOk').onclick = () => doDelete(paths, big.map((b) => b.path));
       return;
     }
     $('#modal').close();
@@ -1758,8 +1758,19 @@ function sysText(h) {
 const SENSE_SECS = [[2, '2 seconds'], [5, '5 seconds'], [10, '10 seconds'], [30, '30 seconds'], [60, '1 minute'], [300, '5 minutes']];
 
 async function loadSense() {
+  // One question at a time: an older answer must not overwrite the state a Start or Stop just changed.
+  if (S.senseAsking) return;
+  S.senseAsking = true;
   let r;
-  try { r = await api('/api/sense'); } catch (e) { return toast(e.message, true); }
+  try {
+    r = await api('/api/sense');
+    S.senseFailed = false;
+  } catch (e) {
+    // This runs every 5 s, so say it once.
+    if (!S.senseFailed) toast(e.message, true);
+    S.senseFailed = true;
+    return;
+  } finally { S.senseAsking = false; }
   S.sense = r;
   // settings.json can hold any interval; the menu must show the one that will be used.
   S.senseSecs ??= SENSE_SECS.some(([n]) => n === r.prefs.intervalS) ? r.prefs.intervalS : 5;
@@ -1782,7 +1793,11 @@ function renderSense() {
   sources.forEach((x) => groups.set(x.hw, [...(groups.get(x.hw) || []), x]));
   // A sensor ticked earlier that has gone (a removed drive, say) still needs a tick to clear.
   const gone = [...S.senseSel].filter((id) => !sources.some((x) => x.id === id));
-  if (gone.length) groups.set('Not reading right now', gone.map((id) => ({ id, sensor: id.split('|').slice(0, -1).join(' '), unit: '' })));
+  if (gone.length) groups.set('Not reading right now', gone.map((id) => {
+    // An id is hardware|sensor|kind.
+    const [hw, sensor, kind] = id.split('|');
+    return { id, sensor: `${hw} ${sensor ?? ''}`.trim(), unit: kind ?? '' };
+  }));
   const v = j.result;
   $('#senseLog').innerHTML = `<div class="set-block sense reveal in"><div class="set-head"><div><h3>Sensor log</h3><p>Writes the readings you tick to a CSV in Downloads. It runs until you press Stop or Shimmy exits, and stops itself at 100 MB. The graphics chips are left out, because asking would wake a sleeping one.</p></div></div>
     ${j.running

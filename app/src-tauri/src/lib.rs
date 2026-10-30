@@ -47,6 +47,19 @@ pub struct Shared {
   store: Store,
   /// One close/trim/clean at a time.
   busy: AtomicBool,
+  /// One thing deleting from the disk at a time, whichever page or timer started it. Apart from `busy`, so a long DISM
+  /// clean-up does not hold back freeing memory.
+  disk_busy: AtomicBool,
+  /// Set first thing at Exit, so a sampler tick cannot undo what Exit puts back.
+  exiting: AtomicBool,
+  /// Only the first failure of each is logged, so a refusing Windows does not fill the log.
+  power_failed: AtomicBool,
+  settings_failed: AtomicBool,
+  sampler_failed: AtomicBool,
+  /// One settings save at a time. When the graphics libraries were last tried, so a failure is not kept for good.
+  save_lock: Mutex<()>,
+  gpu_tried: AtomicU64,
+  nvml_tried: AtomicU64,
   sensors: sensors::SensorState,
   atk: Option<asus::Atk>,
   /// Opened on first use, only when the CPU page asks for the GPU.
@@ -159,8 +172,21 @@ impl Shared {
   }
 
   fn save_settings(&self) {
-    let json = serde_json::to_string_pretty(&*self.settings.lock().unwrap()).unwrap_or_default();
-    let _ = std::fs::write(&self.settings_path, json);
+    let _one = self.save_lock.lock().unwrap();
+    let Ok(json) = serde_json::to_string_pretty(&*self.settings.lock().unwrap()) else { return };
+    match store::write_atomic(&self.settings_path, json.as_bytes()) {
+      Ok(()) => self.settings_failed.store(false, Ordering::SeqCst),
+      Err(e) => {
+        if !self.settings_failed.swap(true, Ordering::SeqCst) {
+          self.store.log("settings-not-saved", "settings.json", &e.to_string());
+        }
+      }
+    }
+  }
+
+  /// A turn at deleting from the disk, or an error to show when something else is at it.
+  fn disk_turn(&self) -> Result<Turn<'_>, String> {
+    Turn::take(&self.disk_busy).ok_or_else(|| "Another clean-up is still running. Try again when it finishes.".to_string())
   }
 
   fn limit_supported(&self) -> bool {
@@ -244,7 +270,9 @@ impl Shared {
   /// (not `asleep` in gpu.rs) and, only then and only for NVIDIA, its watts from NVML. The graphics kernel gives no
   /// watts, so other vendors' cards have none. Asking NVML wakes a sleeping card, so it is never asked while it sleeps.
   fn dgpu_power(&self) -> (Option<String>, bool, Option<f64>) {
-    let card = match self.gpu_counters.lock().unwrap().get_or_insert_with(gpu::Counters::open) {
+    let mut counters = self.gpu_counters.lock().unwrap();
+    forget_failure(&mut counters, &self.gpu_tried);
+    let card = match counters.get_or_insert_with(gpu::Counters::open) {
       Ok(c) => {
         let adapters = c.sample(&HashMap::new()).0;
         let mut dedicated: Vec<_> = adapters.into_iter().filter(|a| !a.integrated).collect();
@@ -254,13 +282,16 @@ impl Shared {
       }
       Err(_) => None,
     };
+    drop(counters);
     let Some(card) = card else { return (None, false, None) };
     // Asleep only when idle next to a built-in chip; a card that runs the screen itself is always awake.
     let awake = !card.asleep;
     if !awake || card.vendor != "NVIDIA" {
       return (Some(card.short), awake, None);
     }
-    let w = match self.nvml.lock().unwrap().get_or_insert_with(|| nvml_wrapper::Nvml::init().map_err(|e| e.to_string())) {
+    let mut nvml = self.nvml.lock().unwrap();
+    forget_failure(&mut nvml, &self.nvml_tried);
+    let w = match nvml.get_or_insert_with(|| nvml_wrapper::Nvml::init().map_err(|e| e.to_string())) {
       Ok(n) => gpu::nvidia(n).ok().and_then(|g| g.power_w),
       Err(_) => None,
     };
@@ -404,6 +435,31 @@ fn fans_of(atk: &asus::Atk) -> Vec<cpu::Fan> {
 }
 
 type Shr = Arc<Shared>;
+
+/// Holds a one-at-a-time flag, and lets go of it even if the work panics.
+struct Turn<'a>(&'a AtomicBool);
+
+impl<'a> Turn<'a> {
+  fn take(flag: &'a AtomicBool) -> Option<Turn<'a>> {
+    (!flag.swap(true, Ordering::SeqCst)).then_some(Turn(flag))
+  }
+}
+
+impl Drop for Turn<'_> {
+  fn drop(&mut self) {
+    self.0.store(false, Ordering::SeqCst);
+  }
+}
+
+/// Drops a stored failure to open the graphics libraries, at most once a minute, so one bad moment does not last until
+/// the window closes.
+fn forget_failure<T>(slot: &mut Option<Result<T, String>>, tried: &AtomicU64) {
+  let now = store::now_ms();
+  if matches!(slot, Some(Err(_))) && now.saturating_sub(tried.load(Ordering::SeqCst)) >= 60_000 {
+    *slot = None;
+    tried.store(now, Ordering::SeqCst);
+  }
+}
 
 struct TrayStatus(MenuItem<Wry>);
 struct TrayPlugged(CheckMenuItem<Wry>);
@@ -561,12 +617,16 @@ async fn get_gpu(s: State<'_, Shr>) -> Result<Value, String> {
   let s = s.inner().clone();
   tauri::async_runtime::spawn_blocking(move || {
     let names: HashMap<u32, String> = system::list_procs(&mut s.sys.lock().unwrap()).iter().map(|p| (p.pid, procs::app_of(p))).collect();
-    let (mut adapters, apps, counters_error) = match s.gpu_counters.lock().unwrap().get_or_insert_with(gpu::Counters::open) {
-      Ok(c) => {
-        let (a, p) = c.sample(&names);
-        (a, p, None)
+    let (mut adapters, apps, counters_error) = {
+      let mut counters = s.gpu_counters.lock().unwrap();
+      forget_failure(&mut counters, &s.gpu_tried);
+      match counters.get_or_insert_with(gpu::Counters::open) {
+        Ok(c) => {
+          let (a, p) = c.sample(&names);
+          (a, p, None)
+        }
+        Err(e) => (Vec::new(), Vec::new(), Some(e.clone())),
       }
-      Err(e) => (Vec::new(), Vec::new(), Some(e.clone())),
     };
     // NVML only for an NVIDIA card Windows' counters show in use: asking it wakes a sleeping card. Without Windows' list
     // nothing is known about the card, so NVML is not asked blindly either.
@@ -574,6 +634,7 @@ async fn get_gpu(s: State<'_, Shr>) -> Result<Value, String> {
       (None, None)
     } else {
       let mut slot = s.nvml.lock().unwrap();
+      forget_failure(&mut slot, &s.nvml_tried);
       match slot.get_or_insert_with(|| nvml_wrapper::Nvml::init().map_err(|e| e.to_string())) {
         Ok(n) => match gpu::nvidia(n) {
           Ok(g) => (Some(g), None),
@@ -708,13 +769,14 @@ fn start_cache_clean(s: State<'_, Shr>, ids: Vec<String>) -> bool {
   let s2 = s.inner().clone();
   let ids: Vec<String> = ids.into_iter().filter(|i| caches::is_cache(i)).collect();
   jobs::start(&s.cache_run, move |progress| {
+    let _turn = s2.disk_turn()?;
     let prefs = s2.settings.lock().unwrap().caches.clone();
     let results = caches::run(&ids, &prefs, &s2.running(), &progress);
     for r in &results {
       s2.store.log("recycle-cache", r.title, &format!("{} files older than {} days, {} MB, moved to the Recycle Bin{}", r.files, prefs.age_days,
         r.recycled / 1_048_576, r.note.as_ref().map(|n| format!("; {n}")).unwrap_or_default()));
     }
-    *s2.cache_scan.lock().unwrap() = jobs::Job { result: Some(caches::scan(&prefs, &s2.running(), &progress)), at: store::now_ms(), ..Default::default() };
+    jobs::set_result(&s2.cache_scan, caches::scan(&prefs, &s2.running(), &progress));
     Ok(results)
   })
 }
@@ -740,6 +802,7 @@ async fn folder_preview(s: State<'_, Shr>, path: String) -> Result<Value, String
 #[tauri::command]
 async fn folder_delete(s: State<'_, Shr>, path: String, permanent: bool, allow_big: bool) -> Result<Value, String> {
   exclusive(s.inner(), move |s| {
+    let _turn = s.disk_turn()?;
     let p = PathBuf::from(&path);
     let c = storage::check_folder(&p, &s.profile, &s.finder_rules()).map_err(|why| format!("Not deleted: {why}."))?;
     if !permanent && c.bytes > finder::bin_capacity(&p) && !allow_big {
@@ -748,7 +811,11 @@ async fn folder_delete(s: State<'_, Shr>, path: String, permanent: bool, allow_b
     let gone_for_good = permanent || c.bytes > finder::bin_capacity(&p);
     let restore = gone_for_good.then(|| s.restore_point_first("deleting a folder for good"));
     if permanent {
-      std::fs::remove_dir_all(&p).map_err(|e| format!("Windows could not delete it: {e}"))?;
+      if let Err(e) = std::fs::remove_dir_all(&p) {
+        // It can stop part way, and what already went is gone, so the Log must say so.
+        s.store.log("delete-failed", &path, &format!("folder, may be partly deleted: {e}"));
+        return Err(format!("Windows could not delete all of it, so some files may already be gone. Scan again to see what is left. ({e})"));
+      }
     } else {
       trash::delete(&p).map_err(|e| format!("Windows could not move it to the Recycle Bin: {e}"))?;
     }
@@ -853,13 +920,14 @@ fn start_clean(s: State<'_, Shr>, ids: Vec<String>) -> bool {
 fn run_clean(s: &Shr, ids: Vec<String>, weekly: Option<AppHandle>) -> bool {
   let s2 = s.clone();
   jobs::start(&s.clean_run, move |progress| {
+    let _turn = s2.disk_turn()?;
     let results = clean::run(&ids, &s2.running(), &progress);
     for r in &results {
       s2.store.log(if weekly.is_some() { "weekly-clean" } else { "clean" }, r.title, &format!("{} files, {} MB freed{}", r.files, r.freed / 1_048_576,
         r.note.as_ref().map(|n| format!("; {n}")).unwrap_or_default()));
     }
     // Re-measure so the page shows what is left.
-    *s2.clean_scan.lock().unwrap() = jobs::Job { result: Some(clean::scan(&s2.running(), &progress)), at: store::now_ms(), ..Default::default() };
+    jobs::set_result(&s2.clean_scan, clean::scan(&s2.running(), &progress));
     if let Some(app) = weekly {
       let freed: u64 = results.iter().map(|r| r.freed).sum();
       let skipped: Vec<&str> = results.iter().filter(|r| r.note.is_some() && r.freed == 0).map(|r| r.title).collect();
@@ -878,6 +946,8 @@ fn run_clean(s: &Shr, ids: Vec<String>, weekly: Option<AppHandle>) -> bool {
 fn start_dism(s: State<'_, Shr>, cleanup: bool) -> bool {
   let s2 = s.inner().clone();
   jobs::start(&s.dism, move |progress| {
+    // Only the clean-up changes anything; measuring can run beside other work.
+    let _turn = if cleanup { Some(s2.disk_turn()?) } else { None };
     let r = if cleanup {
       progress.set("Making a restore point");
       let note = s2.restore_point_first("Windows update backups clean-up");
@@ -904,8 +974,9 @@ fn start_finder(s: State<'_, Shr>) -> bool {
 /// Recycles the chosen files. Each path is re-checked against the exclusions first. A file too big for the Recycle Bin
 /// would be deleted for good, so it is only deleted when the page has asked a second time (allow_permanent).
 #[tauri::command]
-async fn finder_delete(s: State<'_, Shr>, paths: Vec<String>, allow_permanent: bool) -> Result<Value, String> {
+async fn finder_delete(s: State<'_, Shr>, paths: Vec<String>, confirmed: Vec<String>) -> Result<Value, String> {
   exclusive(s.inner(), move |s| {
+    let _turn = s.disk_turn()?;
     let (mut fits, mut big, mut refused) = (Vec::new(), Vec::new(), Vec::new());
     let (roots, rules) = (s.finder_roots(), s.finder_rules());
     for p in paths {
@@ -918,7 +989,8 @@ async fn finder_delete(s: State<'_, Shr>, paths: Vec<String>, allow_permanent: b
         }
       }
     }
-    if !big.is_empty() && !allow_permanent {
+    // The second question covers exactly the files it listed, so nothing else can be deleted for good on its answer.
+    if big.iter().any(|(p, _)| !confirmed.iter().any(|c| Path::new(c) == p.as_path())) {
       return Ok(json!({ "needsConfirm": big.iter().map(|(p, b)| json!({ "path": p, "bytes": b })).collect::<Vec<_>>(), "refused": refused }));
     }
     let restore = (!big.is_empty()).then(|| s.restore_point_first("deleting files too big for the Recycle Bin"));
@@ -935,14 +1007,13 @@ async fn finder_delete(s: State<'_, Shr>, paths: Vec<String>, allow_permanent: b
       }
     }
     for (p, b) in &big {
-      match std::fs::remove_file(p) {
-        Ok(()) => {
-          permanent += 1;
-          permanent_bytes += b;
-          gone.insert(p.to_string_lossy().into_owned());
-          s.store.log("delete-permanent", &p.to_string_lossy(), &format!("{} MB, too big for the Recycle Bin, deleted after confirmation", b / 1_048_576));
-        }
-        Err(e) => failed.push(json!({ "path": p, "reason": e.to_string() })),
+      if roots.iter().find(|r| p.starts_with(r)).is_some_and(|r| store::delete_exact(r, p)) {
+        permanent += 1;
+        permanent_bytes += b;
+        gone.insert(p.to_string_lossy().into_owned());
+        s.store.log("delete-permanent", &p.to_string_lossy(), &format!("{} MB, too big for the Recycle Bin, deleted after confirmation", b / 1_048_576));
+      } else {
+        failed.push(json!({ "path": p, "reason": "in use, or no longer where it was" }));
       }
     }
     // Drop what was removed from the cached results, so the list updates without a rescan.
@@ -1153,20 +1224,28 @@ fn heat_watch(s: &Shared, now: u64) {
   let temp = s.readings().0.and_then(|r| sensors::cpu_temp(&r));
   let action = s.heat_watch.lock().unwrap().step(enabled, boost_off, temp, now);
   match action {
-    Some(heat::Action::BoostOff) => match heat::boost_off(now) {
-      Ok(saved) => {
-        let what = format!("AC {}, DC {} before", saved.ac, saved.dc);
-        s.settings.lock().unwrap().heat.saved = Some(saved);
+    Some(heat::Action::BoostOff) => {
+      // The old values are on disk before anything changes: a crash in between then costs nothing, because putting them
+      // back at the next start is harmless. The other way round, a crash would leave boost off with no record.
+      let result = heat::read_boost(now).and_then(|saved| {
+        s.settings.lock().unwrap().heat.saved = Some(saved.clone());
         s.save_settings();
-        s.heat_failed.store(false, Ordering::SeqCst);
-        s.store.log("boost-off", &what, &format!("processor at {:.0} °C for 30 s; boost off until it cools to {:.0} °C", temp.unwrap_or(0.0), heat::COOL_C));
-      }
-      Err(e) => {
-        if !s.heat_failed.swap(true, Ordering::SeqCst) {
-          s.store.log("boost-off-failed", "heat protection", &e);
+        heat::boost_off(&saved).map(|()| saved)
+      });
+      match result {
+        Ok(saved) => {
+          s.heat_failed.store(false, Ordering::SeqCst);
+          s.store.log("boost-off", &format!("AC {}, DC {} before", saved.ac, saved.dc), &format!("processor at {:.0} °C for 30 s; boost off until it cools to {:.0} °C", temp.unwrap_or(0.0), heat::COOL_C));
+        }
+        Err(e) => {
+          s.settings.lock().unwrap().heat.saved = None;
+          s.save_settings();
+          if !s.heat_failed.swap(true, Ordering::SeqCst) {
+            s.store.log("boost-off-failed", "heat protection", &e);
+          }
         }
       }
-    },
+    }
     Some(heat::Action::BoostOn) => {
       let why = match temp {
         _ if !enabled => "heat protection turned off".to_string(),
@@ -1195,11 +1274,13 @@ fn power_watch(s: &Shared) {
   let want = power::guid_of(if on_charger { &p.plugged } else { &p.battery });
   let before = power::current();
   if before == Some(want) {
+    s.power_failed.store(false, Ordering::SeqCst);
     return;
   }
   let side = if on_charger { "charger plugged in" } else { "on battery" };
   match power::set(want) {
     Ok(()) => {
+      s.power_failed.store(false, Ordering::SeqCst);
       {
         let mut st = s.settings.lock().unwrap();
         if st.power.saved.is_none() {
@@ -1209,7 +1290,13 @@ fn power_watch(s: &Shared) {
       s.save_settings();
       s.store.log("power-mode", power::label(want), &format!("{side}; was {}", before.map(power::label).unwrap_or("unknown")));
     }
-    Err(e) => s.store.log("power-mode-failed", power::label(want), &e),
+    Err(e) => {
+      // Tried again on the next tick, not at the next plug change.
+      *s.power_last.lock().unwrap() = None;
+      if !s.power_failed.swap(true, Ordering::SeqCst) {
+        s.store.log("power-mode-failed", power::label(want), &e);
+      }
+    }
   }
 }
 
@@ -1349,6 +1436,8 @@ async fn uninstall_app(s: State<'_, Shr>, key: String) -> Result<Value, String> 
       return Err("Another uninstaller is still open. Finish that one first.".to_string());
     }
     let (name, exe, args) = programs::uninstall_command(&key)?;
+    // A key only administrators can write can still point at a folder anyone can. Its file must be an administrator's too.
+    let exe = programs::trusted_uninstaller(&exe).ok_or_else(|| format!("{name}'s uninstaller is in a folder other programs can change, so Shimmy does not start it as administrator. Use Windows' Installed apps page."))?;
     let mut cmd = std::process::Command::new(&exe);
     if !args.is_empty() {
       cmd.raw_arg(&args);
@@ -1356,7 +1445,7 @@ async fn uninstall_app(s: State<'_, Shr>, key: String) -> Result<Value, String> 
     let child = cmd.spawn().map_err(|e| format!("Windows could not start its uninstaller: {e}"))?;
     *slot = Some(child);
     drop(slot);
-    s.store.log("uninstall", &name, &format!("started its own uninstaller: {exe} {args}"));
+    s.store.log("uninstall", &name, &format!("started its own uninstaller: {} {args}", exe.display()));
     Ok(json!({ "name": name }))
   })
   .await
@@ -1571,7 +1660,10 @@ fn start_sensor_log(app: AppHandle, s: State<'_, Shr>, keys: Vec<String>, interv
   let mut file = store::create_new(&dir, &name).map_err(|e| format!("Could not start a log in Downloads: {e}"))?;
   // The byte-order mark makes Excel read the file as UTF-8.
   let head = format!("\u{feff}{}", senselog::header(&keys));
-  file.write_all(head.as_bytes()).map_err(|e| format!("Could not start a log in Downloads: {e}"))?;
+  if let Err(e) = file.write_all(head.as_bytes()) {
+    store::discard(&file);
+    return Err(format!("Could not start a log in Downloads: {e}"));
+  }
   s.settings.lock().unwrap().sensor_log = senselog::Prefs { interval_s: secs, chosen: keys.clone() };
   s.save_settings();
   s.store.log("sensor-log", &name, &format!("started: {} sensors every {secs} s", keys.len()));
@@ -2003,11 +2095,10 @@ fn notify(app: &AppHandle, title: &str, body: &str) {
 fn tray_clean(app: AppHandle, trim_only: bool, auto: bool) {
   let s: Shr = app.state::<Shr>().inner().clone();
   std::thread::spawn(move || {
-    if s.busy.swap(true, Ordering::SeqCst) {
-      return;
-    }
-    let r = if trim_only { trim_impl(&s) } else { quick_clean_impl(&s) };
-    s.busy.store(false, Ordering::SeqCst);
+    let r = {
+      let Some(_turn) = Turn::take(&s.busy) else { return };
+      if trim_only { trim_impl(&s) } else { quick_clean_impl(&s) }
+    };
     let freed = r["freedMB"].as_i64().unwrap_or(0);
     let title = match (auto, freed > 0) {
       (true, true) => format!("Memory was full, Shimmy freed {}", fmt_mb(freed)),
@@ -2047,9 +2138,22 @@ fn update_tray(app: &AppHandle, last: &AtomicU64) {
 /// Exit from the tray, and after an update starts its installer: puts heat protection's boost back, saves, quits.
 fn exit_app(app: &AppHandle) {
   let s = app.state::<Shr>();
+  s.exiting.store(true, Ordering::SeqCst);
   s.restore_boost("Shimmy exited");
   s.restore_power("Shimmy exited");
   restore_priorities(&s);
+  // Nothing re-holds the charge once Shimmy is gone, so a hold must not keep the battery low. The setting stays on, and
+  // the first tick of the next start holds again.
+  let held = {
+    let st = s.settings.lock().unwrap();
+    st.plugged.on.then(|| st.charge_limit.unwrap_or(100))
+  };
+  if let Some(limit) = held {
+    match s.write_limit(limit) {
+      Ok(_) => s.store.log("plugged-mode-paused", &format!("{limit}%"), "Shimmy exited; charge limit back to the previous choice until it starts again"),
+      Err(e) => s.store.log("plugged-mode-pause-failed", &format!("{limit}%"), &e),
+    }
+  }
   // The log flushes every row, so this only lets it write its closing line to the Log.
   s.sensor_log_stop.store(true, Ordering::SeqCst);
   for _ in 0..20 {
@@ -2179,7 +2283,8 @@ fn automation(app: &AppHandle, s: &Shr, tick: u64) {
       s.update_busy.store(false, Ordering::SeqCst);
     });
   }
-  if tick % 20 == 10 && !st.weekly.cats.is_empty() && auto::weekly_due(&st.weekly, now, &auto::local_now()) && !s.clean_run.lock().unwrap().running {
+  // Waits while something else is deleting from the disk, so this week's clean is not used up by doing nothing.
+  if tick % 20 == 10 && !st.weekly.cats.is_empty() && auto::weekly_due(&st.weekly, now, &auto::local_now()) && !s.clean_run.lock().unwrap().running && !s.disk_busy.load(Ordering::SeqCst) {
     s.settings.lock().unwrap().weekly.last_run = now;
     s.save_settings();
     run_clean(s, st.weekly.cats.clone(), Some(app.clone()));
@@ -2196,27 +2301,41 @@ fn start_sampler(app: AppHandle) {
     let mut perf = cpu::Perf::open().ok();
     std::thread::sleep(Duration::from_millis(500));
     for tick in 0u64.. {
-      update_tray(&app, &last);
       let s = app.state::<Shr>();
-      automation(&app, s.inner(), tick);
-      s.sample_power();
-      if tick % 600 == 0 {
-        s.reapply_charge_limit();
+      // Exit has put everything back, and this must not change it again in the moment before Shimmy is gone.
+      if s.exiting.load(Ordering::SeqCst) {
+        std::thread::sleep(Duration::from_secs(3));
+        continue;
       }
-      cpu_sys.refresh_cpu_usage();
-      {
-        let clocks = perf.as_mut().map(|p| p.sample()).unwrap_or_default();
-        let mut live = s.cpu_live.lock().unwrap();
-        *live = cpu::Live { total: cpu_sys.global_cpu_usage(), per_cpu: cpu_sys.cpus().iter().map(|c| c.cpu_usage()).collect(), clocks };
-      }
-      if tick % 3 == 0 {
-        s.store.sample(system::mem_now().used_mb);
-        let load = s.cpu_live.lock().unwrap().total;
-        let temp = s.readings().0.and_then(|r| sensors::cpu_temp(&r));
-        s.store.sample_cpu(load, temp.map(|t| t as f32));
-      }
-      if tick % 20 == 19 {
-        s.store.save();
+      // Heat protection and the rest live in this loop, so one bad tick must not end it without a word.
+      let ticked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        update_tray(&app, &last);
+        automation(&app, s.inner(), tick);
+        s.sample_power();
+        if tick % 600 == 0 {
+          s.reapply_charge_limit();
+        }
+        cpu_sys.refresh_cpu_usage();
+        {
+          let clocks = perf.as_mut().map(|p| p.sample()).unwrap_or_default();
+          let mut live = s.cpu_live.lock().unwrap();
+          *live = cpu::Live { total: cpu_sys.global_cpu_usage(), per_cpu: cpu_sys.cpus().iter().map(|c| c.cpu_usage()).collect(), clocks };
+        }
+        if tick % 3 == 0 {
+          s.store.sample(system::mem_now().used_mb);
+          let load = s.cpu_live.lock().unwrap().total;
+          let temp = s.readings().0.and_then(|r| sensors::cpu_temp(&r));
+          s.store.sample_cpu(load, temp.map(|t| t as f32));
+        }
+        if tick % 20 == 19 {
+          s.store.save();
+        }
+      }));
+      if ticked.is_err() && !s.sampler_failed.swap(true, Ordering::SeqCst) {
+        // Inside its own guard: what panicked may have left the log's lock unusable too.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+          alert(&app, s.inner(), "Shimmy hit a problem", "Heat protection and its other automatic work may have stopped. Restart Shimmy from the tray to be sure.");
+        }));
       }
       std::thread::sleep(Duration::from_secs(3));
     }
@@ -2226,24 +2345,124 @@ fn start_sampler(app: AppHandle) {
 /// Where Shimmy keeps its data. It runs as administrator and writes these files often, so they must not sit in a folder
 /// the user's other programs can write to: a link planted there would make it overwrite any file on the PC. ProgramData
 /// first; Program Files if something got to that folder first, since no standard user can make folders there. Not
-/// elevated (a dev build), there is nothing to protect. The second value says what happened, for the Log.
-fn data_dir(user_dir: PathBuf, id: &str) -> (PathBuf, Option<String>) {
+/// elevated (a dev build), there is nothing to protect. The second value says what happened, for the Log; the third is
+/// whether files were just copied in from the user's own folder.
+fn data_dir(user_dir: PathBuf, id: &str) -> (PathBuf, Option<String>, bool) {
   if !update::elevated() {
-    return (user_dir, None);
+    return (user_dir, None, false);
   }
-  let bases = [clean::known("ProgramData").map(|b| b.join("Shimmy Optimizer")), clean::known("ProgramFiles").map(|b| b.join("Shimmy Optimizer Data"))];
-  for dir in bases.into_iter().flatten().map(|b| b.join(id)) {
-    if update::protected_folder(&dir).is_ok() {
+  for dir in data_bases().into_iter().map(|b| b.join(id)) {
+    if update::protected_folder(&dir, false).is_ok() {
       let moved = store::move_in(&user_dir, &dir);
-      return (dir.clone(), (moved > 0).then(|| format!("{moved} files moved to {} from {}", dir.display(), user_dir.display())));
+      return (dir.clone(), (moved > 0).then(|| format!("{moved} files moved to {} from {}", dir.display(), user_dir.display())), moved > 0);
     }
   }
-  (user_dir, Some("Shimmy could not set up a protected folder, so its data stays in your own folder".into()))
+  (user_dir, Some("Shimmy could not set up a protected folder, so its data stays in your own folder".into()), false)
+}
+
+fn data_bases() -> Vec<PathBuf> {
+  [clean::known("ProgramData").map(|b| b.join("Shimmy Optimizer")), clean::known("ProgramFiles").map(|b| b.join("Shimmy Optimizer Data"))].into_iter().flatten().collect()
+}
+
+/// Settings copied in from the user's own folder could have been written there by any program, so what deletes or closes
+/// things unattended starts off until the user turns it on again. Returns what was turned off, for the Log.
+fn calm_imported(st: &mut Settings) -> Vec<&'static str> {
+  let mut off = Vec::new();
+  if std::mem::take(&mut st.weekly.enabled) {
+    off.push("the weekly clean");
+  }
+  if std::mem::take(&mut st.auto_clean.enabled) {
+    off.push("the automatic memory clean");
+  }
+  if !st.finder.extra_roots.is_empty() {
+    st.finder.extra_roots.clear();
+    off.push("the extra folders to search");
+  }
+  off
+}
+
+/// Reads settings.json. One bad value must not cost the rest, least of all the records of what Shimmy has to put back, so
+/// everything else is kept. The second value says what was wrong, when anything was.
+fn load_settings(text: &str) -> (Settings, Option<String>) {
+  let e = match serde_json::from_str(text) {
+    Ok(st) => return (st, None),
+    Err(e) => e.to_string(),
+  };
+  let Ok(file) = serde_json::from_str::<Value>(text) else { return (Settings::default(), Some(e)) };
+  let mut good = serde_json::to_value(Settings::default()).unwrap_or(Value::Null);
+  keep_good(&mut good, &mut Vec::new(), &file);
+  (serde_json::from_value(good).unwrap_or_default(), Some(e))
+}
+
+/// Copies each value of `file` into `root` if the whole still reads as Settings, going inside objects that do not.
+fn keep_good(root: &mut Value, at: &mut Vec<String>, file: &Value) {
+  fn node<'a>(root: &'a mut Value, at: &[String]) -> &'a mut Value {
+    at.iter().fold(root, |v, k| &mut v[k.as_str()])
+  }
+  let Some(fields) = file.as_object() else { return };
+  for (k, v) in fields {
+    let here = node(root, at);
+    let old = here.get(k).cloned();
+    here[k.as_str()] = v.clone();
+    if serde_json::from_value::<Settings>(root.clone()).is_ok() {
+      continue;
+    }
+    let here = node(root, at);
+    match old {
+      Some(o) => here[k.as_str()] = o,
+      None => {
+        here.as_object_mut().map(|m| m.remove(k));
+      }
+    }
+    if v.is_object() && here.get(k).is_some_and(Value::is_object) {
+      at.push(k.clone());
+      keep_good(root, at, v);
+      at.pop();
+    }
+  }
 }
 
 /// `--report`: a one-page summary of this PC (report.rs). Returns the exit code, or None to start normally.
 pub fn report_step() -> Option<i32> {
   std::env::args().any(|a| a == "--report").then(report::cli)
+}
+
+/// Whether Windows' WebView2 would take this environment variable as an instruction.
+fn webview_override(name: &str) -> bool {
+  name.to_ascii_uppercase().starts_with("WEBVIEW2_")
+}
+
+/// Shimmy is administrator, and any program the user runs can set the user's environment variables. WebView2 obeys some:
+/// they can open a debugging port on Shimmy's page, or swap in another browser to run as administrator. So none of them
+/// reach it. Runs first thing in `main`, before anything else has started.
+pub fn clear_webview_overrides() {
+  for (name, _) in std::env::vars_os().filter(|(n, _)| webview_override(&n.to_string_lossy())) {
+    // SAFETY: no other thread exists yet.
+    unsafe { std::env::remove_var(name) };
+  }
+}
+
+/// `--reset-limit`, run by the uninstaller: nothing will manage the charge limit after this, so one Shimmy set goes back
+/// to 100 %. A limit it never touched is left alone. Returns the exit code, or None to start normally.
+pub fn uninstall_step() -> Option<i32> {
+  if !std::env::args().any(|a| a == "--reset-limit") {
+    return None;
+  }
+  const ID: &str = "com.shimmy.optimizer";
+  let set_by_shimmy = data_bases().iter().filter_map(|b| std::fs::read_to_string(b.join(ID).join("settings.json")).ok()).any(|t| limit_is_ours(&t));
+  if !set_by_shimmy {
+    return Some(0);
+  }
+  Some(match asus::Atk::open().and_then(|a| a.set(asus::CHARGE_LIMIT, 100)) {
+    Some(1) => 0,
+    _ => 1,
+  })
+}
+
+/// Whether these settings show Shimmy wrote a charge limit.
+fn limit_is_ours(settings: &str) -> bool {
+  let (st, _) = load_settings(settings);
+  st.charge_limit.is_some() || st.plugged.on
 }
 
 /// `--autostart on|off`, run by the installer hooks (installer-hooks.nsh). Returns the exit code, or None to start normally.
@@ -2260,13 +2479,23 @@ pub fn run() {
     .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
     .plugin(tauri_plugin_notification::init())
     .setup(|app| {
-      let (dir, data_note) = data_dir(app.path().app_data_dir()?, &app.config().identifier);
+      let (dir, data_note, copied_in) = data_dir(app.path().app_data_dir()?, &app.config().identifier);
       let settings_path = dir.join("settings.json");
-      let mut settings: Settings = std::fs::read_to_string(&settings_path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+      let settings_text = std::fs::read_to_string(&settings_path).ok();
+      let (mut settings, settings_problem) = settings_text.as_deref().map_or_else(|| (Settings::default(), None), load_settings);
       sanitize(&mut settings);
+      let calmed = if copied_in { calm_imported(&mut settings) } else { Vec::new() };
       let store = Store::open(dir);
       if let Some(note) = data_note {
         store.log("data-folder", "Shimmy's data", &note);
+      }
+      if !calmed.is_empty() {
+        store.log("settings-copied-in", "settings.json", &format!("came from your own folder, which any program can write, so these are off until you turn them on again: {}", calmed.join(", ")));
+      }
+      if let Some(problem) = settings_problem {
+        // Kept for a look, then overwritten by the first save.
+        let _ = store::write_atomic(&settings_path.with_extension("json.bad"), settings_text.as_deref().unwrap_or("").as_bytes());
+        store.log("settings-repaired", "settings.json", &format!("part of it could not be read, so that part is back to its default; the old file is settings.json.bad ({problem})"));
       }
       if let Ok(desktop) = app.path().desktop_dir() {
         if let Some(what) = store.import_old(&desktop.join("RAM Optimizer").join("data")) {
@@ -2284,6 +2513,14 @@ pub fn run() {
         sys: Mutex::new(sys),
         store,
         busy: AtomicBool::new(false),
+        disk_busy: AtomicBool::new(false),
+        exiting: AtomicBool::new(false),
+        power_failed: AtomicBool::new(false),
+        settings_failed: AtomicBool::new(false),
+        sampler_failed: AtomicBool::new(false),
+        save_lock: Mutex::new(()),
+        gpu_tried: AtomicU64::new(0),
+        nvml_tried: AtomicU64::new(0),
         sensors: sensor_state,
         atk: asus::Atk::open(),
         nvml: Mutex::new(None),
@@ -2333,6 +2570,9 @@ pub fn run() {
         settings_path,
       }));
       // Shimmy was closed (or the PC restarted) while it had boost off: put it back before anything else.
+      if copied_in {
+        app.state::<Shr>().save_settings();
+      }
       app.state::<Shr>().restore_boost("Shimmy was closed while boost was off");
       // Same for the power mode, unless it is still meant to follow the charger: then the first tick sets it anyway.
       if !app.state::<Shr>().settings.lock().unwrap().power.follow {
@@ -2390,5 +2630,60 @@ mod tests {
     let mut off = Settings::default();
     sanitize(&mut off);
     assert_eq!(off.plugged.hold_pct, 0, "an unused hold level is left alone");
+  }
+
+  #[test]
+  fn one_bad_value_costs_only_itself() {
+    let saved = r#"{ "scheme": "381b4222-f694-41f0-9685-ff5bb260df2e", "ac": 2, "dc": 1, "since": 5 }"#;
+    let text = format!(r#"{{ "chargeLimit": 60, "heat": {{ "enabled": "yes please", "saved": {saved} }}, "sensorLog": {{ "intervalS": -1 }}, "plugged": {{ "on": true, "holdPct": 42 }} }}"#);
+    let (st, problem) = load_settings(&text);
+    assert!(problem.is_some());
+    assert_eq!(st.charge_limit, Some(60));
+    assert_eq!(st.plugged.hold_pct, 42);
+    assert_eq!(st.heat.saved.as_ref().map(|s| (s.ac, s.dc)), Some((2, 1)), "the record of boost being off survives");
+    assert!(st.heat.enabled, "the bad value is back to its default");
+    let (fine, problem) = load_settings(r#"{ "chargeLimit": 80 }"#);
+    assert_eq!((fine.charge_limit, problem), (Some(80), None));
+    let (broken, problem) = load_settings(r#"{ "chargeLimit": 8"#);
+    assert!(broken.charge_limit.is_none() && problem.is_some(), "half a file is not guessed at");
+  }
+
+  #[test]
+  fn settings_copied_in_start_with_nothing_unattended() {
+    let mut st = Settings::default();
+    assert!(calm_imported(&mut st).is_empty(), "nothing on, nothing to say");
+    st.weekly.enabled = true;
+    st.auto_clean.enabled = true;
+    st.finder.extra_roots = vec![r"D:\Stuff".into()];
+    st.charge_limit = Some(80);
+    assert_eq!(calm_imported(&mut st).len(), 3);
+    assert!(!st.weekly.enabled && !st.auto_clean.enabled && st.finder.extra_roots.is_empty());
+    assert_eq!(st.charge_limit, Some(80), "the rest of the user's choices stay");
+  }
+
+  #[test]
+  fn webview_settings_from_the_environment_are_not_obeyed() {
+    assert!(webview_override("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS") && webview_override("webview2_browser_executable_folder"));
+    assert!(!webview_override("PATH") && !webview_override("MY_WEBVIEW2_THING"));
+  }
+
+  #[test]
+  fn only_a_limit_shimmy_set_is_reset_on_uninstall() {
+    assert!(limit_is_ours(r#"{ "chargeLimit": 80 }"#) && limit_is_ours(r#"{ "plugged": { "on": true, "holdPct": 42 } }"#));
+    assert!(!limit_is_ours("{}") && !limit_is_ours(r#"{ "plugged": { "on": false } }"#));
+  }
+
+  #[test]
+  fn a_failure_to_open_is_forgotten_at_most_once_a_minute() {
+    let tried = AtomicU64::new(0);
+    let mut slot: Option<Result<u32, String>> = Some(Err("no".into()));
+    forget_failure(&mut slot, &tried);
+    assert!(slot.is_none(), "the first time it can try again");
+    slot = Some(Err("no".into()));
+    forget_failure(&mut slot, &tried);
+    assert!(slot.is_some(), "not again straight away");
+    let mut fine: Option<Result<u32, String>> = Some(Ok(1));
+    forget_failure(&mut fine, &AtomicU64::new(0));
+    assert_eq!(fine, Some(Ok(1)));
   }
 }

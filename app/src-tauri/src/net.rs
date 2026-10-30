@@ -63,6 +63,8 @@ pub fn place(ip: IpAddr) -> Place {
   };
   match ip {
     IpAddr::V4(a) if a.is_loopback() || a.is_unspecified() => Place::ThisPc,
+    // 100.64.0.0/10 is a carrier's or a VPN's own network (Tailscale's, for one), not the public internet.
+    IpAddr::V4(a) if a.octets()[0] == 100 && a.octets()[1] & 0xc0 == 64 => Place::Local,
     IpAddr::V4(a) if a.is_private() || a.is_link_local() || a.is_multicast() || a.is_broadcast() => Place::Local,
     IpAddr::V6(a) if a.is_loopback() || a.is_unspecified() => Place::ThisPc,
     // fc00::/7 is private, fe80::/10 is link-local, ff00::/8 is multicast.
@@ -178,7 +180,7 @@ fn owner(pid: u32, owners: &HashMap<u32, Owner>) -> String {
   }
 }
 
-/// Sockets by app: apps on the internet first, then the most connections, then by name. A closing socket counts only as
+/// Sockets by app: apps on the internet first, then the most other connections, then by name. A closing socket counts only as
 /// closing: its app is not on the internet any more.
 pub fn by_app(conns: Vec<Conn>, owners: &HashMap<u32, Owner>) -> Vec<AppConns> {
   let mut apps: BTreeMap<String, AppConns> = BTreeMap::new();
@@ -242,6 +244,10 @@ mod tests {
     assert_eq!(at("10.0.0.1"), Place::Local);
     assert_eq!(at("172.16.0.1"), Place::Local);
     assert_eq!(at("169.254.1.1"), Place::Local);
+    assert_eq!(at("100.64.0.1"), Place::Local, "Tailscale and carriers");
+    assert_eq!(at("100.127.255.255"), Place::Local);
+    assert_eq!(at("100.128.0.1"), Place::Internet, "just past that range");
+    assert_eq!(at("100.63.255.255"), Place::Internet, "just before it");
     assert_eq!(at("224.0.0.251"), Place::Local);
     assert_eq!(at("fe80::1"), Place::Local);
     assert_eq!(at("fd00::1"), Place::Local);

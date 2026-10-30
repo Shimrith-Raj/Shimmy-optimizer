@@ -39,6 +39,10 @@ const REPARSE_POINT: u32 = 0x400;
 const UPDATES_DIR: &str = "Shimmy Optimizer\\updates";
 /// Protected (no inheritance): SYSTEM and Administrators full control, everyone else read and run only.
 const DIR_SDDL: &str = "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)";
+/// The same with no access for anyone else: the log names files and apps, which is nobody else's business.
+const PRIVATE_SDDL: &str = "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)";
+/// The account Windows' own files belong to.
+const TRUSTED_INSTALLER: &str = "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -176,9 +180,15 @@ fn program_data() -> PathBuf {
   }
 }
 
-/// Where installers are saved: a folder only administrators can write to.
+/// Where installers are saved: a folder only administrators can write to. Any program can make a folder in ProgramData,
+/// so if one got to ours first, updates must still work: Program Files, where it cannot.
 fn updates_dir() -> PathBuf {
-  program_data().join(UPDATES_DIR)
+  let first = program_data().join(UPDATES_DIR);
+  let usable = [first.parent(), Some(first.as_path())].into_iter().flatten().all(|d| !d.exists() || check_folder(d).is_ok());
+  match crate::clean::known("ProgramFiles") {
+    Some(pf) if !usable => pf.join("Shimmy Optimizer Data").join("updates"),
+    _ => first,
+  }
 }
 
 /// Where a version's installer is saved.
@@ -207,10 +217,10 @@ fn owner_sid(p: &Path) -> Result<String, String> {
   }
 }
 
-/// Replaces the folder's permissions with `DIR_SDDL`, cut off from what it would inherit.
-fn lock_down(dir: &Path) -> Result<(), String> {
+/// Replaces the folder's permissions with this list, cut off from what it would inherit.
+fn lock_down(dir: &Path, sddl: &str) -> Result<(), String> {
   let name = wide(dir);
-  let sddl: Vec<u16> = DIR_SDDL.encode_utf16().chain(Some(0)).collect();
+  let sddl: Vec<u16> = sddl.encode_utf16().chain(Some(0)).collect();
   unsafe {
     let mut sd = PSECURITY_DESCRIPTOR::default();
     ConvertStringSecurityDescriptorToSecurityDescriptorW(PCWSTR(sddl.as_ptr()), SDDL_REVISION_1, &mut sd, None).map_err(|e| e.to_string())?;
@@ -239,19 +249,53 @@ fn check_folder(dir: &Path) -> Result<(), String> {
   Ok(())
 }
 
-/// Creates a folder if needed and makes sure only administrators can write to it.
-pub fn protected_folder(dir: &Path) -> Result<(), String> {
-  std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+/// Nothing a standard user owns or a link may sit in a protected folder: it could have been planted in the moment before
+/// the folder was locked, and its owner could still change it afterwards.
+fn no_foreign_items(dir: &Path) -> Result<(), String> {
+  for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
+    let p = entry.map_err(|e| e.to_string())?.path();
+    let md = std::fs::symlink_metadata(&p).map_err(|e| e.to_string())?;
+    if md.file_attributes() & REPARSE_POINT != 0 || !trusted_owner(&owner_sid(&p)?) {
+      return Err(format!("{} does not belong in a protected folder", p.display()));
+    }
+  }
+  Ok(())
+}
+
+/// Makes sure only administrators can write to a folder, creating it if needed. Each folder is checked before anything
+/// goes in it, and the parent is locked too: under ProgramData it would otherwise let anyone make things in it.
+/// `readable` lets other users read and run what is inside.
+pub fn protected_folder(dir: &Path, readable: bool) -> Result<(), String> {
+  let sddl = if readable { DIR_SDDL } else { PRIVATE_SDDL };
   if let Some(parent) = dir.parent() {
+    if !parent.exists() {
+      std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
     check_folder(parent)?;
+    lock_down(parent, DIR_SDDL)?;
+  }
+  if !dir.exists() {
+    std::fs::create_dir(dir).map_err(|e| e.to_string())?;
   }
   check_folder(dir)?;
-  lock_down(dir)
+  lock_down(dir, sddl)?;
+  no_foreign_items(dir)
 }
 
 /// If the updates folder cannot be protected, nothing is downloaded or run.
 fn prepare_dir() -> Result<(), String> {
-  protected_folder(&updates_dir()).map_err(|e| format!("Shimmy could not set up a protected folder for the installer ({e}), so it will not download or run one."))
+  protected_folder(&updates_dir(), true).map_err(|e| format!("Shimmy could not set up a protected folder for the installer ({e}), so it will not download or run one."))
+}
+
+/// Whether a program and its folder belong to SYSTEM, Administrators or Windows itself, and are no links. What a standard
+/// user planted belongs to them.
+pub fn trusted_program(exe: &Path) -> bool {
+  let ours = |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_attributes() & REPARSE_POINT == 0) && owner_sid(p).is_ok_and(|o| system_owner(&o));
+  exe.is_file() && exe.parent().is_some_and(ours) && ours(exe)
+}
+
+fn system_owner(sid: &str) -> bool {
+  trusted_owner(sid) || sid == TRUSTED_INSTALLER
 }
 
 /// Whether this process really holds administrator rights.
@@ -611,9 +655,27 @@ mod tests {
   }
 
   #[test]
+  fn windows_own_files_count_as_trusted_programs() {
+    assert!(system_owner(TRUSTED_INSTALLER) && system_owner("S-1-5-18") && system_owner("S-1-5-32-544"));
+    assert!(!system_owner("S-1-5-21-1-2-3-1001"), "a user");
+    assert!(!trusted_owner(TRUSTED_INSTALLER), "but Shimmy's own folders are not Windows'");
+    let d = scratch("planted");
+    let exe = d.join("uninstall.exe");
+    std::fs::write(&exe, b"x").unwrap();
+    assert!(!trusted_program(&exe), "what a standard user wrote");
+    assert!(!trusted_program(&d.join("nothing.exe")));
+    let _ = std::fs::remove_dir_all(&d);
+  }
+
+  #[test]
+  fn the_data_folder_lets_nobody_else_read_it() {
+    assert!(!PRIVATE_SDDL.contains("BU") && DIR_SDDL.contains("BU"));
+  }
+
+  #[test]
   fn the_updates_folder_gets_a_protected_admin_only_list() {
     let d = scratch("acl");
-    lock_down(&d).unwrap();
+    lock_down(&d, DIR_SDDL).unwrap();
     let name = wide(&d);
     let got = unsafe {
       use windows::Win32::Security::Authorization::ConvertSecurityDescriptorToStringSecurityDescriptorW;
