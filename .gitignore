@@ -9,3 +9,6 @@ dist/
 /app/src-tauri/resources/sensors/shimmy-sensors.exe
 # Phase 0 spike: vendored binaries (same libraries as app/src-tauri/resources)
 /spike/vendor/
+
+# Phase 1 probe reports: a real Mac's list its open ports and disks
+/spike/mac/mac-probe-report.*

@@ -151,6 +151,11 @@ mod tests {
     assert!(parse_level("realtime").is_err(), "never higher than normal");
     assert_eq!(original(0x20), 0x20, "Normal stays Normal");
     assert_eq!(original(0x8000), 0x8000, "Above normal is put back as it was");
+  }
+
+  #[cfg(windows)]
+  #[test]
+  fn left_lowered_goes_back_to_normal() {
     assert_eq!(original(0x4000), 0x20, "left Below normal by an earlier Shimmy: back to Normal");
     assert_eq!(original(0x40), 0x20, "left Low by an earlier Shimmy: back to Normal");
   }

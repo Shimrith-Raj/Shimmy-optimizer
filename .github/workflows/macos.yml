@@ -1,5 +1,5 @@
-# Phase 1 of the Mac port (PLAN_mac.md): there is no Mac to test on except GitHub's runners, so this runs the tests, builds
-# the app, starts it, and runs the read-only probe in spike/mac on both kinds of Mac (Apple Silicon and Intel).
+# Phase 1 of the Mac port (PLAN_mac.md): this runs the tests, builds the app, starts it, and runs the read-only probe in
+# spike/mac on both kinds of Mac (Apple Silicon and Intel) on GitHub's runners.
 # The runners are virtual machines: their results say what builds and links, and what the probe can see on them, not
 # everything a real Mac does. The probe's report says which kind of machine each result came from.
 name: macOS
@@ -59,7 +59,8 @@ jobs:
         working-directory: app/src-tauri
         env:
           SHIMMY_NO_ADMIN: "1"
-        run: cargo test
+        # Without this, one failure in the unit tests hides tests/parity.rs, which then never runs.
+        run: cargo test --no-fail-fast
 
       - name: Install npm packages
         if: always()
