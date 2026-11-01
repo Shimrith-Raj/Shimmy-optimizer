@@ -139,7 +139,13 @@ pub fn describe(mode: &PluggedMode, r: &Reading) -> String {
   format!("Holding at {h}%. The charger is powering the laptop and the battery is resting.")
 }
 
+#[cfg(not(windows))]
+pub fn myasus_limit() -> Option<u32> {
+  None
+}
+
 /// MyASUS Battery Care's own limit, from its settings. MyASUS can write it back to the firmware (at start-up, for one).
+#[cfg(windows)]
 pub fn myasus_limit() -> Option<u32> {
   use winreg::{enums::HKEY_LOCAL_MACHINE, RegKey};
   let key = RegKey::predef(HKEY_LOCAL_MACHINE)

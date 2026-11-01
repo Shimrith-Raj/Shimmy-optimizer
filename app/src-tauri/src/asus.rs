@@ -1,8 +1,12 @@
 //! ASUS ATK ACPI calls through the \\.\ATKACPI device, the route G-Helper uses (the WMI route returned nothing on
 //! this Vivobook in Phase 0). The writes are the battery charge limit and the fan mode.
+#[cfg(windows)]
 use windows::core::w;
+#[cfg(windows)]
 use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE};
+#[cfg(windows)]
 use windows::Win32::Storage::FileSystem::{CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING};
+#[cfg(windows)]
 use windows::Win32::System::IO::DeviceIoControl;
 
 const CONTROL_CODE: u32 = 0x0022_240C;
@@ -18,7 +22,14 @@ pub const FAN_MODE: u32 = 0x0011_0019;
 /// the user's OK, because another ASUS firmware may read the same values differently.
 pub const TESTED_MODEL: &str = "M3500QC";
 
+/// There is no ASUS firmware to talk to on a Mac, so `open` never gives an `Atk`.
+#[cfg(not(windows))]
+pub fn model() -> String {
+  String::new()
+}
+
 /// The laptop's model from the BIOS, for example "Vivobook_ASUSLaptop M3500QC_M3500QC". Empty when Windows does not say.
+#[cfg(windows)]
 pub fn model() -> String {
   use winreg::{enums::HKEY_LOCAL_MACHINE, RegKey};
   RegKey::predef(HKEY_LOCAL_MACHINE)
@@ -35,10 +46,32 @@ pub fn is_tested(model: &str) -> bool {
 /// Fan mode names and the firmware's values on this Vivobook, measured in Phase 9 (not G-Helper's ROG order).
 pub const FAN_MODES: [(&str, u32); 3] = [("silent", 1), ("standard", 0), ("performance", 2)];
 
+#[cfg(not(windows))]
+pub struct Atk;
+
+#[cfg(not(windows))]
+impl Atk {
+  pub fn open() -> Option<Atk> {
+    None
+  }
+
+  pub fn get(&self, _device: u32) -> Option<u32> {
+    None
+  }
+
+  pub fn set(&self, _device: u32, _value: u32) -> Option<u32> {
+    None
+  }
+}
+
+#[cfg(windows)]
 pub struct Atk(HANDLE);
+#[cfg(windows)]
 unsafe impl Send for Atk {}
+#[cfg(windows)]
 unsafe impl Sync for Atk {}
 
+#[cfg(windows)]
 impl Atk {
   pub fn open() -> Option<Atk> {
     unsafe {
@@ -76,7 +109,9 @@ impl Atk {
     }
     (got >= 4).then(|| u32::from_le_bytes([out[0], out[1], out[2], out[3]]))
   }
+}
 
+impl Atk {
   /// The active fan mode's name, or None when the firmware does not offer it.
   pub fn fan_mode(&self) -> Option<&'static str> {
     let raw = self.get(FAN_MODE)?;
@@ -104,6 +139,7 @@ impl Atk {
   }
 }
 
+#[cfg(windows)]
 impl Drop for Atk {
   fn drop(&mut self) {
     unsafe {

@@ -9,15 +9,60 @@
 //!   values win where both answer.
 use serde::Serialize;
 use std::collections::HashMap;
+#[cfg(windows)]
 use windows::core::w;
+#[cfg(windows)]
 use windows::Wdk::Graphics::Direct3D::{
   D3DKMTCloseAdapter, D3DKMTOpenAdapterFromLuid, D3DKMTQueryAdapterInfo, D3DKMT_ADAPTERTYPE, D3DKMT_ADAPTER_PERFDATA, D3DKMT_CLOSEADAPTER,
   D3DKMT_NODE_PERFDATA, D3DKMT_OPENADAPTERFROMLUID, D3DKMT_QUERYADAPTERINFO, KMTQAITYPE_ADAPTERPERFDATA, KMTQAITYPE_ADAPTERTYPE,
   KMTQAITYPE_NODEPERFDATA, KMTQUERYADAPTERINFOTYPE,
 };
+#[cfg(windows)]
 use windows::Win32::Foundation::LUID;
+#[cfg(windows)]
 use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE};
+#[cfg(windows)]
 use windows::Win32::System::Performance::*;
+
+#[cfg(windows)]
+pub use nvml_wrapper::Nvml;
+
+// The Mac's graphics readings are tested in Phase 1 of the Mac plan. No NVIDIA library and no counters until then.
+#[cfg(not(windows))]
+pub struct Nvml;
+
+#[cfg(not(windows))]
+impl Nvml {
+  pub fn init() -> Result<Nvml, String> {
+    Err(crate::platform::NOT_ON_MAC.into())
+  }
+}
+
+#[cfg(not(windows))]
+pub fn nvidia(_nvml: &Nvml) -> Result<Nvidia, String> {
+  Err(crate::platform::NOT_ON_MAC.into())
+}
+
+#[cfg(not(windows))]
+pub struct Counters;
+
+#[cfg(not(windows))]
+impl Counters {
+  pub fn open() -> Result<Counters, String> {
+    Err(crate::platform::NOT_ON_MAC.into())
+  }
+
+  pub fn sample(&mut self, _names: &HashMap<u32, String>) -> (Vec<Adapter>, Vec<AppUse>) {
+    (Vec::new(), Vec::new())
+  }
+
+  pub fn learn(&mut self, _types: &[(String, u32)]) {}
+}
+
+#[cfg(not(windows))]
+pub fn kernel_readouts(_adapters: &mut [Adapter]) -> Vec<(String, u32)> {
+  Vec::new()
+}
 
 const NVIDIA: u32 = 0x10DE;
 const AMD: u32 = 0x1002;
@@ -59,6 +104,7 @@ pub struct Status {
   pub text: String,
 }
 
+#[cfg(windows)]
 pub fn nvidia(nvml: &nvml_wrapper::Nvml) -> Result<Nvidia, String> {
   use nvml_wrapper::bitmasks::device::ThrottleReasons as T;
   use nvml_wrapper::enum_wrappers::device::{Clock, TemperatureSensor, TemperatureThreshold};
@@ -192,6 +238,7 @@ struct AdapterInfo {
 }
 
 /// A long-lived PDH query: utilisation is a rate, so each read compares with the previous one.
+#[cfg(windows)]
 pub struct Counters {
   query: PDH_HQUERY,
   engine: PDH_HCOUNTER,
@@ -201,6 +248,7 @@ pub struct Counters {
 }
 
 // The handles are only used under Shared's mutex.
+#[cfg(windows)]
 unsafe impl Send for Counters {}
 
 /// "luid_0x00000000_0x0000D1B5" from any instance name holding it.
@@ -317,6 +365,7 @@ pub fn nvml_wanted(adapters: &[Adapter]) -> bool {
   adapters.iter().any(|a| a.vendor_id == NVIDIA && !a.asleep)
 }
 
+#[cfg(windows)]
 fn dxgi_adapters() -> HashMap<String, AdapterInfo> {
   let mut out = HashMap::new();
   let Ok(f) = (unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }) else { return out };
@@ -333,6 +382,7 @@ fn dxgi_adapters() -> HashMap<String, AdapterInfo> {
   out
 }
 
+#[cfg(windows)]
 pub(crate) fn read(counter: PDH_HCOUNTER) -> Vec<(String, f64)> {
   unsafe {
     let (mut size, mut count) = (0u32, 0u32);
@@ -352,6 +402,7 @@ pub(crate) fn read(counter: PDH_HCOUNTER) -> Vec<(String, f64)> {
   }
 }
 
+#[cfg(windows)]
 impl Counters {
   pub fn open() -> Result<Counters, String> {
     unsafe {
@@ -396,6 +447,7 @@ impl Counters {
 /// Fills each adapter's readout from the graphics kernel, for every adapter that may be asked (never a sleeping card, see
 /// `may_sleep`). Takes no lock, so callers do it after letting go of `Counters`. Returns the adapter types it learned, for
 /// `Counters::learn`. The sleep verdicts are worked out again with them.
+#[cfg(windows)]
 pub fn kernel_readouts(adapters: &mut [Adapter]) -> Vec<(String, u32)> {
   let mut learned = Vec::new();
   let has_nvidia = adapters.iter().any(|a| a.vendor_id == NVIDIA);
@@ -421,6 +473,7 @@ pub fn readouts_without_counters(adapters: &mut Vec<Adapter>, nv: Option<Nvidia>
   }
 }
 
+#[cfg(windows)]
 impl Drop for Counters {
   fn drop(&mut self) {
     unsafe {
@@ -690,6 +743,7 @@ fn adapter_status(a: &Adapter) -> Status {
 }
 
 /// The graphics kernel calls. Each query opens a handle to the adapter by its LUID, asks, and always closes it.
+#[cfg(windows)]
 mod kmt {
   use super::*;
 
@@ -754,6 +808,7 @@ mod kmt {
 
 /// A read-only look at every adapter the graphics kernel will answer for, for the real-PC check in tests/real_scan.rs.
 /// Like the Graphics page, it skips a dedicated card that Windows shows idle, so it never wakes one.
+#[cfg(windows)]
 pub fn kmt_report(c: &mut Counters) -> Vec<(String, bool, Option<u32>, Option<Kmt>)> {
   let (adapters, _) = c.sample(&HashMap::new());
   adapters

@@ -4,6 +4,7 @@
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+#[cfg(windows)]
 use windows::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_LOWEST};
 
 /// The check stops at this temperature, whatever is left of its time.
@@ -114,6 +115,7 @@ pub fn load(stop: &Arc<AtomicBool>) -> Vec<std::thread::JoinHandle<()>> {
     .map(|i| {
       let stop = stop.clone();
       std::thread::spawn(move || {
+        #[cfg(windows)]
         unsafe {
           let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
         }

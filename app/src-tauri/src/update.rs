@@ -7,18 +7,28 @@ use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
+#[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
+#[cfg(windows)]
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
+#[cfg(windows)]
 use windows::Win32::Foundation::{HLOCAL, LocalFree};
+#[cfg(windows)]
 use windows::Win32::Security::Authorization::{ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, GetNamedSecurityInfoW, SDDL_REVISION_1, SE_FILE_OBJECT, SetNamedSecurityInfoW};
+#[cfg(windows)]
 use windows::Win32::Security::{ACL, DACL_SECURITY_INFORMATION, GetSecurityDescriptorDacl, OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID};
+#[cfg(windows)]
 use windows::Win32::Storage::FileSystem::FILE_SHARE_READ;
+#[cfg(windows)]
 use windows::Win32::System::Com::CoTaskMemFree;
+#[cfg(windows)]
 use windows::Win32::UI::Shell::{FOLDERID_ProgramData, KF_FLAG_DEFAULT, SHGetKnownFolderPath};
+#[cfg(windows)]
 use windows::core::{BOOL, PCWSTR, PWSTR};
 
 const LATEST: &str = "https://api.github.com/repos/Shimrith-Raj/Shimmy-optimizer/releases/latest";
@@ -141,6 +151,7 @@ fn sha256_file(p: &Path) -> std::io::Result<String> {
 }
 
 /// Opens a file for reading only, letting nobody else write to it, delete it or rename it while the handle is open.
+#[cfg(windows)]
 fn open_locked(p: &Path) -> std::io::Result<std::fs::File> {
   std::fs::OpenOptions::new().read(true).share_mode(FILE_SHARE_READ.0).open(p)
 }
@@ -163,11 +174,45 @@ pub fn install_check(downloaded: Option<&str>, latest: Option<&str>) -> Result<(
   }
 }
 
+// The Mac's update route is Phase 7 of the Mac plan. Until then there is no protected folder, so nothing is downloaded,
+// and nothing is installed or trusted.
+#[cfg(not(windows))]
+pub fn installer_path(_version: &str) -> PathBuf {
+  PathBuf::new()
+}
+
+#[cfg(not(windows))]
+pub fn protected_folder(_dir: &Path, _readable: bool) -> Result<(), String> {
+  Err(crate::platform::NOT_ON_MAC.into())
+}
+
+#[cfg(not(windows))]
+fn prepare_dir() -> Result<(), String> {
+  Err(crate::platform::NOT_ON_MAC.into())
+}
+
+#[cfg(not(windows))]
+pub fn trusted_program(_exe: &Path) -> bool {
+  false
+}
+
+#[cfg(not(windows))]
+pub fn elevated() -> bool {
+  false
+}
+
+#[cfg(not(windows))]
+pub fn install(_d: &Downloaded) -> Result<(), String> {
+  Err(crate::platform::NOT_ON_MAC.into())
+}
+
+#[cfg(windows)]
 fn wide(p: &Path) -> Vec<u16> {
   p.as_os_str().encode_wide().chain(Some(0)).collect()
 }
 
 /// ProgramData, from Windows and not from the environment (a user's own variable could point it anywhere).
+#[cfg(windows)]
 fn program_data() -> PathBuf {
   let fallback = || PathBuf::from(r"C:\ProgramData");
   match unsafe { SHGetKnownFolderPath(&FOLDERID_ProgramData, KF_FLAG_DEFAULT, None) } {
@@ -182,6 +227,7 @@ fn program_data() -> PathBuf {
 
 /// Where installers are saved: a folder only administrators can write to. Any program can make a folder in ProgramData,
 /// so if one got to ours first, updates must still work: Program Files, where it cannot.
+#[cfg(windows)]
 fn updates_dir() -> PathBuf {
   let first = program_data().join(UPDATES_DIR);
   let usable = [first.parent(), Some(first.as_path())].into_iter().flatten().all(|d| !d.exists() || check_folder(d).is_ok());
@@ -192,6 +238,7 @@ fn updates_dir() -> PathBuf {
 }
 
 /// Where a version's installer is saved.
+#[cfg(windows)]
 pub fn installer_path(version: &str) -> PathBuf {
   updates_dir().join(format!("Shimmy-Optimizer-Setup-{version}.exe"))
 }
@@ -202,6 +249,7 @@ fn trusted_owner(sid: &str) -> bool {
 }
 
 /// The SID of a file or folder's owner, as text.
+#[cfg(windows)]
 fn owner_sid(p: &Path) -> Result<String, String> {
   let name = wide(p);
   unsafe {
@@ -218,6 +266,7 @@ fn owner_sid(p: &Path) -> Result<String, String> {
 }
 
 /// Replaces the folder's permissions with this list, cut off from what it would inherit.
+#[cfg(windows)]
 fn lock_down(dir: &Path, sddl: &str) -> Result<(), String> {
   let name = wide(dir);
   let sddl: Vec<u16> = sddl.encode_utf16().chain(Some(0)).collect();
@@ -238,6 +287,7 @@ fn lock_down(dir: &Path, sddl: &str) -> Result<(), String> {
 }
 
 /// A real folder (not a link somewhere else) owned by SYSTEM or Administrators.
+#[cfg(windows)]
 fn check_folder(dir: &Path) -> Result<(), String> {
   let meta = std::fs::symlink_metadata(dir).map_err(|e| e.to_string())?;
   if !meta.is_dir() || meta.file_attributes() & REPARSE_POINT != 0 {
@@ -251,6 +301,7 @@ fn check_folder(dir: &Path) -> Result<(), String> {
 
 /// Nothing a standard user owns or a link may sit in a protected folder: it could have been planted in the moment before
 /// the folder was locked, and its owner could still change it afterwards.
+#[cfg(windows)]
 fn no_foreign_items(dir: &Path) -> Result<(), String> {
   for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
     let p = entry.map_err(|e| e.to_string())?.path();
@@ -265,6 +316,7 @@ fn no_foreign_items(dir: &Path) -> Result<(), String> {
 /// Makes sure only administrators can write to a folder, creating it if needed. Each folder is checked before anything
 /// goes in it, and the parent is locked too: under ProgramData it would otherwise let anyone make things in it.
 /// `readable` lets other users read and run what is inside.
+#[cfg(windows)]
 pub fn protected_folder(dir: &Path, readable: bool) -> Result<(), String> {
   let sddl = if readable { DIR_SDDL } else { PRIVATE_SDDL };
   if let Some(parent) = dir.parent() {
@@ -283,12 +335,14 @@ pub fn protected_folder(dir: &Path, readable: bool) -> Result<(), String> {
 }
 
 /// If the updates folder cannot be protected, nothing is downloaded or run.
+#[cfg(windows)]
 fn prepare_dir() -> Result<(), String> {
   protected_folder(&updates_dir(), true).map_err(|e| format!("Shimmy could not set up a protected folder for the installer ({e}), so it will not download or run one."))
 }
 
 /// Whether a program and its folder belong to SYSTEM, Administrators or Windows itself, and are no links. What a standard
 /// user planted belongs to them.
+#[cfg(windows)]
 pub fn trusted_program(exe: &Path) -> bool {
   let ours = |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_attributes() & REPARSE_POINT == 0) && owner_sid(p).is_ok_and(|o| system_owner(&o));
   exe.is_file() && exe.parent().is_some_and(ours) && ours(exe)
@@ -299,6 +353,7 @@ fn system_owner(sid: &str) -> bool {
 }
 
 /// Whether this process really holds administrator rights.
+#[cfg(windows)]
 pub fn elevated() -> bool {
   use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
   use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
@@ -482,6 +537,7 @@ pub fn download(rel: &Release, done: &AtomicU64, total: &AtomicU64) -> Result<Do
 /// Starts the installer (its normal window, not silent). The file is opened so nobody else can write to, delete or
 /// replace it, hashed through that same handle, and the handle stays open until the installer has started. The caller
 /// exits Shimmy right after.
+#[cfg(windows)]
 pub fn install(d: &Downloaded) -> Result<(), String> {
   let mut file = open_locked(&d.path).map_err(|e| match e.kind() {
     std::io::ErrorKind::NotFound => "The downloaded installer is gone. Download it again.".to_string(),
@@ -615,6 +671,7 @@ mod tests {
     assert!(status_message(500, false).contains("500"));
   }
 
+  #[cfg(windows)]
   #[test]
   fn installer_name_carries_the_version() {
     let p = installer_path("0.5.1");
@@ -654,6 +711,7 @@ mod tests {
     d
   }
 
+  #[cfg(windows)]
   #[test]
   fn windows_own_files_count_as_trusted_programs() {
     assert!(system_owner(TRUSTED_INSTALLER) && system_owner("S-1-5-18") && system_owner("S-1-5-32-544"));
@@ -672,6 +730,7 @@ mod tests {
     assert!(!PRIVATE_SDDL.contains("BU") && DIR_SDDL.contains("BU"));
   }
 
+  #[cfg(windows)]
   #[test]
   fn the_updates_folder_gets_a_protected_admin_only_list() {
     let d = scratch("acl");
@@ -693,6 +752,7 @@ mod tests {
     assert!(got.contains("(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)"), "{got}");
   }
 
+  #[cfg(windows)]
   #[test]
   fn a_locked_installer_cannot_be_changed_or_swapped() {
     let d = scratch("lock");
@@ -711,6 +771,7 @@ mod tests {
     let _ = std::fs::remove_dir_all(&d);
   }
 
+  #[cfg(windows)]
   #[test]
   fn install_starts_a_file_it_holds_open_and_refuses_a_changed_one() {
     let d = scratch("run");

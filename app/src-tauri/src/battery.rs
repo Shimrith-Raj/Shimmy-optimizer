@@ -3,6 +3,9 @@
 use crate::sensors::{value, Reading};
 use regex::Regex;
 use serde::Serialize;
+#[cfg(not(windows))]
+use crate::platform::CommandExt;
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::LazyLock;

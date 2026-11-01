@@ -1,3 +1,6 @@
+// The Mac's placeholders leave Windows-only helpers unused until each Mac version is written (see platform.rs).
+#![cfg_attr(not(windows), allow(dead_code, unused_imports, unused_mut, unused_variables))]
+
 pub mod asus;
 pub mod auto;
 pub mod autostart;
@@ -13,6 +16,7 @@ pub mod hold;
 pub mod hw;
 pub mod jobs;
 pub mod net;
+pub mod platform;
 pub mod power;
 pub mod prio;
 pub mod procs;
@@ -63,7 +67,7 @@ pub struct Shared {
   sensors: sensors::SensorState,
   atk: Option<asus::Atk>,
   /// Opened on first use, only when the CPU page asks for the GPU.
-  nvml: Mutex<Option<Result<nvml_wrapper::Nvml, String>>>,
+  nvml: Mutex<Option<Result<gpu::Nvml, String>>>,
   base_mhz: Option<f64>,
   /// Which logical processors share a core, read once at start.
   topology: cpu::Topology,
@@ -291,7 +295,7 @@ impl Shared {
     }
     let mut nvml = self.nvml.lock().unwrap();
     forget_failure(&mut nvml, &self.nvml_tried);
-    let w = match nvml.get_or_insert_with(|| nvml_wrapper::Nvml::init().map_err(|e| e.to_string())) {
+    let w = match nvml.get_or_insert_with(|| gpu::Nvml::init().map_err(|e| e.to_string())) {
       Ok(n) => gpu::nvidia(n).ok().and_then(|g| g.power_w),
       Err(_) => None,
     };
@@ -635,7 +639,7 @@ async fn get_gpu(s: State<'_, Shr>) -> Result<Value, String> {
     } else {
       let mut slot = s.nvml.lock().unwrap();
       forget_failure(&mut slot, &s.nvml_tried);
-      match slot.get_or_insert_with(|| nvml_wrapper::Nvml::init().map_err(|e| e.to_string())) {
+      match slot.get_or_insert_with(|| gpu::Nvml::init().map_err(|e| e.to_string())) {
         Ok(n) => match gpu::nvidia(n) {
           Ok(g) => (Some(g), None),
           Err(e) => (None, Some(e)),
@@ -1421,6 +1425,7 @@ fn open_installed_apps() -> Result<(), String> {
 /// the rest, and Shimmy does not wait for it.
 #[tauri::command]
 async fn uninstall_app(s: State<'_, Shr>, key: String) -> Result<Value, String> {
+  #[cfg(windows)]
   use std::os::windows::process::CommandExt;
   let s = s.inner().clone();
   tauri::async_runtime::spawn_blocking(move || {
@@ -1439,6 +1444,7 @@ async fn uninstall_app(s: State<'_, Shr>, key: String) -> Result<Value, String> 
     // A key only administrators can write can still point at a folder anyone can. Its file must be an administrator's too.
     let exe = programs::trusted_uninstaller(&exe).ok_or_else(|| format!("{name}'s uninstaller is in a folder other programs can change, so Shimmy does not start it as administrator. Use Windows' Installed apps page."))?;
     let mut cmd = std::process::Command::new(&exe);
+    #[cfg(windows)]
     if !args.is_empty() {
       cmd.raw_arg(&args);
     }
@@ -1567,13 +1573,28 @@ async fn get_system_info(s: State<'_, Shr>) -> Result<Value, String> {
   .map_err(|e| e.to_string())?
 }
 
+/// UTC for now on the Mac, like `auto::local_now`.
+#[cfg(not(windows))]
+fn local_stamp() -> String {
+  let t = store::iso(store::now_ms());
+  format!("{} {}", &t[..10], t[11..19].replace(':', ""))
+}
+
+#[cfg(not(windows))]
+fn local_clock() -> String {
+  let t = store::iso(store::now_ms());
+  format!("{} {}", &t[..10], &t[11..19])
+}
+
 /// Local date and time for file names, such as 2026-10-29 143205.
+#[cfg(windows)]
 fn local_stamp() -> String {
   let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
   format!("{:04}-{:02}-{:02} {:02}{:02}{:02}", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond)
 }
 
 /// Local date and time for people to read, such as 2026-10-29 14:32:05.
+#[cfg(windows)]
 fn local_clock() -> String {
   let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
   format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond)

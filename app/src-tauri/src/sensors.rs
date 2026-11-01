@@ -2,13 +2,19 @@
 //! its latest readings. The sidecar sits in a job object that kills it when Shimmy exits, and is restarted if it dies.
 use serde::Deserialize;
 use std::io::{BufRead, BufReader};
+#[cfg(not(windows))]
+use crate::platform::CommandExt;
+#[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+#[cfg(windows)]
 use windows::Win32::Foundation::HANDLE;
+#[cfg(windows)]
 use windows::Win32::System::JobObjects::{
   AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
   JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
@@ -108,9 +114,18 @@ pub fn read_once(exe: &std::path::Path, limit: Duration) -> Option<Vec<Reading>>
   got.map(|rows| Steady::default().apply(rows, crate::store::now_ms()))
 }
 
+/// LibreHardwareMonitor is Windows-only, so the Mac has no sidecar. Mac sensors are tested in Phase 1 of the Mac plan.
+#[cfg(not(windows))]
+pub fn start(_exe: PathBuf, state: SensorState) {
+  state.lock().unwrap().error = Some(crate::platform::NOT_ON_MAC.into());
+}
+
+#[cfg(windows)]
 struct Job(HANDLE);
+#[cfg(windows)]
 unsafe impl Send for Job {}
 
+#[cfg(windows)]
 fn kill_on_close_job() -> Option<Job> {
   unsafe {
     let job = CreateJobObjectW(None, None).ok()?;
@@ -121,6 +136,7 @@ fn kill_on_close_job() -> Option<Job> {
   }
 }
 
+#[cfg(windows)]
 pub fn start(exe: PathBuf, state: SensorState) {
   // Tauri gives a verbatim \\?\C:\... path; .NET's base directory is unreliable with it.
   let text = exe.to_string_lossy().into_owned();

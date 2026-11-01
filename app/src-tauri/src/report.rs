@@ -117,6 +117,12 @@ fn ascii(s: &str) -> String {
 /// Whether anything is listening to stdout. Shimmy is a windowed program, so it has no console of its own: a redirect or
 /// a pipe is already there, and otherwise it borrows the console of the terminal that started it. None of that exists
 /// when it was started elevated from a non-elevated terminal, or from the Run box.
+#[cfg(not(windows))]
+fn can_print() -> bool {
+  true
+}
+
+#[cfg(windows)]
 fn can_print() -> bool {
   use windows::Win32::Storage::FileSystem::{GetFileType, FILE_TYPE_UNKNOWN};
   use windows::Win32::System::Console::{AttachConsole, GetStdHandle, ATTACH_PARENT_PROCESS, STD_OUTPUT_HANDLE};

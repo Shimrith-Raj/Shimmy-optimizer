@@ -5,9 +5,14 @@ Find things by the function names below (grep them); line numbers drift. Keep th
 
 @CONTEXT.md
 
-Plans: `PLAN.md` (Phases 0 to 10, all built) and `PLAN_premium_features.md` (P1 to P3, the current work).
+Plans: `PLAN.md` (Phases 0 to 10, all built), `PLAN_premium_features.md` (P1 to P3, all built) and `PLAN_mac.md` (the Mac port, the current work).
 
 ## How to add things
+
+**Anything that calls Windows.** Put it behind `#[cfg(windows)]`, with a `#[cfg(not(windows))]` version of the same signature
+beside it until the Mac version exists (`platform.rs`, `platform::NOT_ON_MAC`). A Mac placeholder refuses or reports nothing:
+it never deletes, closes or changes anything. Pure logic stays shared. A test that needs Windows gets `#[cfg(windows)]`.
+`PLAN_mac.md` has the command that checks the Mac target from Windows.
 
 **A command.** In `lib.rs`: `#[tauri::command] fn name(s: State<'_, Shr>, ...) -> Result<Value, String>` (`Shr = Arc<Shared>`).
 Slow work goes in `tauri::async_runtime::spawn_blocking`. Add it to `generate_handler![...]` in `run()`, or it is silently

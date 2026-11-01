@@ -3,6 +3,7 @@
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+#[cfg(windows)]
 use windows::Win32::NetworkManagement::IpHelper::{
   GetExtendedTcpTable, GetExtendedUdpTable, MIB_TCP6ROW_OWNER_PID, MIB_TCPROW_OWNER_PID, MIB_UDP6ROW_OWNER_PID, MIB_UDPROW_OWNER_PID, TCP_TABLE_OWNER_PID_ALL, UDP_TABLE_OWNER_PID,
 };
@@ -114,15 +115,23 @@ fn fetch(call: impl Fn(Option<*mut core::ffi::c_void>, &mut u32) -> u32) -> Resu
   Err("The connection table kept changing while Shimmy read it. Try again.".into())
 }
 
+#[cfg(not(windows))]
+pub fn list() -> Result<Vec<Conn>, String> {
+  Err(crate::platform::NOT_ON_MAC.into())
+}
+
+#[cfg(windows)]
 fn tcp(af: u32) -> Result<Vec<u8>, String> {
   fetch(|p, size| unsafe { GetExtendedTcpTable(p, size, false, af, TCP_TABLE_OWNER_PID_ALL, 0) })
 }
 
+#[cfg(windows)]
 fn udp(af: u32) -> Result<Vec<u8>, String> {
   fetch(|p, size| unsafe { GetExtendedUdpTable(p, size, false, af, UDP_TABLE_OWNER_PID, 0) })
 }
 
 /// Every TCP and UDP socket on this PC right now, IPv4 and IPv6.
+#[cfg(windows)]
 pub fn list() -> Result<Vec<Conn>, String> {
   let mut out = Vec::new();
   for r in rows::<MIB_TCPROW_OWNER_PID>(&tcp(AF_INET)?) {
@@ -275,6 +284,7 @@ mod tests {
     assert_eq!(state_words(99), "Unknown");
   }
 
+  #[cfg(windows)]
   #[test]
   fn table_rows_are_read_and_a_bad_count_is_cut() {
     let row = |pid: u32| [0u32, 0, pid].iter().flat_map(|d| d.to_ne_bytes()).collect::<Vec<u8>>();

@@ -3,6 +3,12 @@
 //! bug report.
 use serde_json::Value;
 
+#[cfg(not(windows))]
+pub fn read() -> Result<Value, String> {
+  Err(crate::platform::NOT_ON_MAC.into())
+}
+
+#[cfg(windows)]
 const SCRIPT: &str = r#"
 $ErrorActionPreference = 'SilentlyContinue'
 $vram = @{}
@@ -27,6 +33,7 @@ $nt = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
 "#;
 
 /// Everything the System info page shows. Takes a second or two, so the caller keeps the answer.
+#[cfg(windows)]
 pub fn read() -> Result<Value, String> {
   let modules = [crate::clean::PS_BASE[0], crate::clean::PS_BASE[1], "CimCmdlets", "Storage"];
   let out = crate::clean::powershell(&modules, SCRIPT)

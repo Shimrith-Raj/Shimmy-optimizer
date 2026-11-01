@@ -6,11 +6,16 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
+#[cfg(not(windows))]
+use crate::platform::MetadataExt;
+#[cfg(windows)]
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+#[cfg(windows)]
 use windows::core::PCWSTR;
+#[cfg(windows)]
 use windows::Win32::Storage::FileSystem::GetVolumeNameForVolumeMountPointW;
 
 const HIDDEN: u32 = 0x2;
@@ -255,7 +260,14 @@ pub fn allowed(path: &Path, roots: &[PathBuf], rules: &Rules) -> Result<(), Stri
   Ok(())
 }
 
+/// No room in a bin means nothing is moved to it, and what is too big waits for a second confirmation.
+#[cfg(not(windows))]
+pub fn bin_capacity(_path: &Path) -> u64 {
+  0
+}
+
 /// Recycle Bin size limit for the volume holding `path`, from Explorer's own settings; 0 when the bin is turned off.
+#[cfg(windows)]
 pub fn bin_capacity(path: &Path) -> u64 {
   use winreg::{enums::HKEY_CURRENT_USER, RegKey};
   let root = path.components().next().map(|c| format!("{}\\", c.as_os_str().to_string_lossy())).unwrap_or_else(|| "C:\\".into());
@@ -291,6 +303,7 @@ mod tests {
     assert!(CLIENT_WORK.is_match("Invoice-0042.pdf"));
   }
 
+  #[cfg(windows)]
   #[test]
   fn deletion_gate() {
     let base = std::env::temp_dir().join(format!("shimmy-finder-test-{}", std::process::id()));
@@ -313,6 +326,7 @@ mod tests {
     let _ = fs::remove_dir_all(&base);
   }
 
+  #[cfg(windows)]
   #[test]
   fn the_gate_is_not_fooled_by_a_link_or_a_climb_out() {
     let base = std::env::temp_dir().join(format!("shimmy-finder-link-test-{}", std::process::id()));

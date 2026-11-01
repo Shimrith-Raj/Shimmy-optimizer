@@ -3,16 +3,23 @@ use crate::jobs::Progress;
 use crate::sensors::Reading;
 use serde::Serialize;
 use std::collections::HashMap;
+#[cfg(not(windows))]
+use crate::platform::MetadataExt;
+#[cfg(windows)]
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(windows)]
 use windows::core::PCWSTR;
+#[cfg(windows)]
 use windows::Win32::Storage::FileSystem::{GetDiskFreeSpaceExW, GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW};
 
+#[cfg(windows)]
 const DRIVE_FIXED: u32 = 3;
 /// Cloud placeholders and offline files take no space on this disk.
 const NOT_LOCAL: u32 = 0x0040_0000 | 0x0004_0000 | 0x0000_1000;
 
+#[cfg(windows)]
 fn wide(s: &str) -> Vec<u16> {
   s.encode_utf16().chain(Some(0)).collect()
 }
@@ -26,6 +33,17 @@ pub struct Drive {
   pub free: u64,
 }
 
+#[cfg(not(windows))]
+pub fn space(_root: &str) -> (u64, u64) {
+  (0, 0)
+}
+
+#[cfg(not(windows))]
+pub fn drives() -> Vec<Drive> {
+  Vec::new()
+}
+
+#[cfg(windows)]
 pub fn space(root: &str) -> (u64, u64) {
   let (mut free, mut total) = (0u64, 0u64);
   let w = wide(root);
@@ -35,6 +53,7 @@ pub fn space(root: &str) -> (u64, u64) {
   (total, free)
 }
 
+#[cfg(windows)]
 pub fn drives() -> Vec<Drive> {
   let mask = unsafe { GetLogicalDrives() };
   (0..26u8)
@@ -378,6 +397,7 @@ mod tests {
   use crate::finder::Rules;
   use std::fs;
 
+  #[cfg(windows)]
   #[test]
   fn folder_gate() {
     let profile = std::env::temp_dir().join(format!("shimmy-storage-test-{}", std::process::id()));

@@ -5,23 +5,80 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+#[cfg(windows)]
 use windows::core::{w, BOOL};
+#[cfg(windows)]
 use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, WPARAM};
+#[cfg(windows)]
 use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+#[cfg(windows)]
 use windows::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
+#[cfg(windows)]
 use windows::Win32::System::ProcessStatus::EmptyWorkingSet;
+#[cfg(windows)]
 use windows::Win32::System::RemoteDesktop::ProcessIdToSessionId;
+#[cfg(windows)]
 use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+#[cfg(windows)]
 use windows::Win32::System::Threading::{
   GetExitCodeProcess, OpenProcess, TerminateProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
 };
+#[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{
   EnumWindows, GetWindow, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, GW_OWNER, WM_CLOSE,
 };
 
 const MB: f64 = 1_048_576.0;
+#[cfg(windows)]
 const STILL_ACTIVE: u32 = 259;
 
+/// On the Mac, memory totals come from sysinfo for now. Mac apps cannot be trimmed, and nothing is closed or changed
+/// here yet: `close` reports every app as still running, so a caller never thinks one went away.
+#[cfg(not(windows))]
+pub fn mem_now() -> Mem {
+  let mut sys = System::new();
+  sys.refresh_memory();
+  let (total, free) = (sys.total_memory(), sys.available_memory());
+  let mb = |b: u64| (b as f64 / MB).round() as u64;
+  Mem { total_mb: mb(total), free_mb: mb(free), used_mb: mb(total - free), pct: ((total - free) as f64 / total.max(1) as f64 * 100.0).round() as u64 }
+}
+
+#[cfg(not(windows))]
+fn top_windows() -> Vec<(u32, isize, String)> {
+  Vec::new()
+}
+
+/// Windows sessions have no Mac meaning. `procs::classify`'s service rule needs a Mac replacement before anything can
+/// be closed (Phase 3 of the Mac plan).
+#[cfg(not(windows))]
+fn session_of(_pid: u32) -> Option<u32> {
+  None
+}
+
+#[cfg(not(windows))]
+pub fn close(pids: &[u32], _force: bool) -> Vec<u32> {
+  pids.to_vec()
+}
+
+#[cfg(not(windows))]
+pub fn trim_all(_sys: &System, _skip: &HashSet<u32>) -> u32 {
+  0
+}
+
+#[cfg(not(windows))]
+pub fn home(cpu_pct: f32) -> Home {
+  Home { cpu_pct, disk_free_gb: 0.0, disk_total_gb: 0.0, battery: battery_now() }
+}
+
+#[cfg(not(windows))]
+pub fn battery_now() -> Battery {
+  Battery { present: false, pct: None, plugged: LAST_PLUGGED.load(Ordering::Relaxed), charging: false, seconds_left: None }
+}
+
+#[cfg(not(windows))]
+pub fn compact_self() {}
+
+#[cfg(windows)]
 pub fn mem_now() -> Mem {
   let mut s = MEMORYSTATUSEX { dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32, ..Default::default() };
   unsafe {
@@ -33,6 +90,7 @@ pub fn mem_now() -> Mem {
 }
 
 /// Visible, unowned top-level windows with a title, as (pid, hwnd, title). Close to .NET's MainWindowTitle.
+#[cfg(windows)]
 fn top_windows() -> Vec<(u32, isize, String)> {
   unsafe extern "system" fn each(hwnd: HWND, lp: LPARAM) -> BOOL {
     unsafe {
@@ -58,6 +116,7 @@ fn top_windows() -> Vec<(u32, isize, String)> {
   out
 }
 
+#[cfg(windows)]
 fn session_of(pid: u32) -> Option<u32> {
   let mut sid = 0u32;
   unsafe { ProcessIdToSessionId(pid, &mut sid).ok().map(|_| sid) }
@@ -111,6 +170,7 @@ pub fn own_pids(procs: &[Proc]) -> HashSet<u32> {
   }
 }
 
+#[cfg(windows)]
 fn alive(pid: u32) -> bool {
   unsafe {
     let Ok(h) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else { return false };
@@ -122,6 +182,7 @@ fn alive(pid: u32) -> bool {
 }
 
 /// Graceful asks each app's main window to close and waits 5 s; force terminates. Returns the pids still running.
+#[cfg(windows)]
 pub fn close(pids: &[u32], force: bool) -> Vec<u32> {
   let set: HashSet<u32> = pids.iter().copied().collect();
   unsafe {
@@ -146,6 +207,7 @@ pub fn close(pids: &[u32], force: bool) -> Vec<u32> {
 }
 
 /// Empties the working set of every process it can open, except those in `skip`. Returns how many were trimmed.
+#[cfg(windows)]
 pub fn trim_all(sys: &System, skip: &HashSet<u32>) -> u32 {
   let mut n = 0;
   for pid in sys.processes().keys() {
@@ -186,6 +248,7 @@ pub struct Home {
 }
 
 /// `cpu_pct` is the sampler's latest reading; only the sampler refreshes processor use.
+#[cfg(windows)]
 pub fn home(cpu_pct: f32) -> Home {
   let (mut free, mut total) = (0u64, 0u64);
   unsafe {
@@ -202,6 +265,7 @@ pub fn home(cpu_pct: f32) -> Home {
 /// The last known charger state, used while Windows reports it as unknown (255) so a blip does not look like an unplug.
 static LAST_PLUGGED: AtomicBool = AtomicBool::new(false);
 
+#[cfg(windows)]
 pub fn battery_now() -> Battery {
   let mut ps = SYSTEM_POWER_STATUS::default();
   let have = unsafe { GetSystemPowerStatus(&mut ps).is_ok() };
@@ -222,6 +286,7 @@ pub fn battery_now() -> Battery {
 }
 
 /// Hands freed heap back to Windows and trims Shimmy's own working set.
+#[cfg(windows)]
 pub fn compact_self() {
   use windows::Win32::System::Memory::{GetProcessHeap, HeapCompact, HEAP_FLAGS};
   use windows::Win32::System::Threading::GetCurrentProcess;

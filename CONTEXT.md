@@ -59,4 +59,4 @@ Data lives in `%ProgramData%\Shimmy Optimizer\com.shimmy.optimizer\` (administra
 - Shimmy is administrator, so it never loads or writes through anything a standard user controls: PowerShell only through `clean::powershell`, new files in user folders only through `store::create_new`, its data only in the protected folder.
 
 ## State
-Phases 0 to 10 are done and merged (v0.5.1, 2026-10-28). `PLAN_premium_features.md` P1 and P2 are built, bug-swept and merged (v0.8.0, 2026-10-30); P3 is built on branch `premium-p3` (v0.9.0, not merged or released). Still open: the taste-skill inspection pass on the UI. See `PLAN.md` § Progress.
+Phases 0 to 10 are done and merged (v0.5.1, 2026-10-28). `PLAN_premium_features.md` P1 and P2 are built, bug-swept and merged (v0.8.0, 2026-10-30); P3 is built and merged into `main` locally (v0.9.0, 2026-10-31, not pushed or released). The Mac port, for Intel and Apple Silicon, is on branch `macos-version`: see `PLAN_mac.md`. Every Mac placeholder refuses to act. Still open: the taste-skill inspection pass on the UI. See `PLAN.md` § Progress.

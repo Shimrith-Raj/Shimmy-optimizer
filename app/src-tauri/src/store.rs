@@ -4,7 +4,11 @@ use regex::Regex;
 use serde::Serialize;
 use std::fs;
 use std::io::Write;
+#[cfg(not(windows))]
+use crate::platform::MetadataExt;
+#[cfg(windows)]
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+#[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
@@ -69,17 +73,44 @@ pub fn export_row(fields: &[&str]) -> String {
   csv_row(&safe.iter().map(String::as_str).collect::<Vec<_>>())
 }
 
+// The Mac versions of the safety checks are Phase 3 of the Mac plan. Until then each one refuses, so nothing that goes
+// through them can delete or create anything.
+#[cfg(not(windows))]
+pub fn create_new(_dir: &Path, _name: &str) -> std::io::Result<fs::File> {
+  Err(std::io::Error::new(std::io::ErrorKind::Unsupported, crate::platform::NOT_ON_MAC))
+}
+
+#[cfg(not(windows))]
+pub fn discard(_f: &fs::File) {}
+
+#[cfg(not(windows))]
+pub fn really_at(_anchor: &Path, _path: &Path) -> bool {
+  false
+}
+
+#[cfg(not(windows))]
+pub fn delete_exact(_anchor: &Path, _path: &Path) -> bool {
+  false
+}
+
+#[cfg(windows)]
 const DELETE: u32 = 0x0001_0000;
+#[cfg(windows)]
 const FILE_READ_ATTRIBUTES: u32 = 0x80;
+#[cfg(windows)]
 const FILE_WRITE_ATTRIBUTES: u32 = 0x100;
+#[cfg(windows)]
 const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+#[cfg(windows)]
 const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
 
 /// A path's text, the same whichever way Windows or Rust wrote it, for comparing.
+#[cfg(windows)]
 fn path_key(p: &str) -> String {
   p.strip_prefix(r"\\?\").unwrap_or(p).trim_end_matches('\\').to_lowercase()
 }
 
+#[cfg(windows)]
 fn final_path(f: &fs::File) -> Option<String> {
   use windows::Win32::Foundation::HANDLE;
   use windows::Win32::Storage::FileSystem::{GetFinalPathNameByHandleW, FILE_NAME_NORMALIZED};
@@ -89,6 +120,7 @@ fn final_path(f: &fs::File) -> Option<String> {
 }
 
 /// The folder's own long name, without following any link in it (8.3 names such as STUDIO~1 are spelled out).
+#[cfg(windows)]
 fn long_dir(dir: &Path) -> Option<String> {
   use std::os::windows::ffi::OsStrExt;
   use windows::core::PCWSTR;
@@ -99,6 +131,7 @@ fn long_dir(dir: &Path) -> Option<String> {
   (n > 0 && n < buf.len()).then(|| String::from_utf16_lossy(&buf[..n]))
 }
 
+#[cfg(windows)]
 fn delete_on_close(f: &fs::File) -> bool {
   use windows::Win32::Foundation::HANDLE;
   use windows::Win32::Storage::FileSystem::{FileDispositionInfo, SetFileInformationByHandle, FILE_DISPOSITION_INFO};
@@ -109,6 +142,7 @@ fn delete_on_close(f: &fs::File) -> bool {
 /// A new file in a folder the user can write to, such as Downloads. Shimmy is administrator there, so it never opens
 /// what is already at that name: that could be a link to a system file. Refuses an existing file or link, and removes
 /// and refuses a file that a link anywhere in the folder's path sent somewhere else.
+#[cfg(windows)]
 pub fn create_new(dir: &Path, name: &str) -> std::io::Result<fs::File> {
   const GENERIC_WRITE: u32 = 0x4000_0000;
   let f = fs::OpenOptions::new().write(true).create_new(true).access_mode(GENERIC_WRITE | DELETE).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT).open(dir.join(name))?;
@@ -121,6 +155,7 @@ pub fn create_new(dir: &Path, name: &str) -> std::io::Result<fs::File> {
 }
 
 /// Removes a file `create_new` made, through its handle.
+#[cfg(windows)]
 pub fn discard(f: &fs::File) {
   delete_on_close(f);
 }
@@ -133,6 +168,7 @@ pub fn write_new(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
 /// Opens what is at this exact path, a link itself rather than what it points to, when it really is below `anchor`: the
 /// path's text must be where Windows says the file is, so a link in any folder on the way, a `..` or an 8.3 name is
 /// refused. `anchor` is a folder Shimmy trusts, and may itself lead elsewhere (Downloads moved to D:).
+#[cfg(windows)]
 fn open_exact(anchor: &Path, path: &Path, access: u32) -> Option<fs::File> {
   let rel = path.strip_prefix(anchor).ok()?;
   if !rel.components().all(|c| matches!(c, std::path::Component::Normal(_))) {
@@ -144,12 +180,14 @@ fn open_exact(anchor: &Path, path: &Path, access: u32) -> Option<fs::File> {
 }
 
 /// Whether this exact file or folder is really below `anchor`, and is not itself a link. Cloud placeholders are fine.
+#[cfg(windows)]
 pub fn really_at(anchor: &Path, path: &Path) -> bool {
   open_exact(anchor, path, FILE_READ_ATTRIBUTES).is_some_and(|f| f.metadata().is_ok_and(|m| !m.file_type().is_symlink()))
 }
 
 /// Deletes one file for good, through a handle that was checked with `open_exact`, so nothing can be swapped in between
 /// the check and the delete. A read-only file has the flag cleared first. False when it was refused or is in use.
+#[cfg(windows)]
 pub fn delete_exact(anchor: &Path, path: &Path) -> bool {
   use windows::Win32::Foundation::HANDLE;
   use windows::Win32::Storage::FileSystem::{FileBasicInfo, SetFileInformationByHandle, FILE_ATTRIBUTE_NORMAL, FILE_BASIC_INFO};
@@ -318,6 +356,7 @@ mod tests {
     d
   }
 
+  #[cfg(windows)]
   #[test]
   fn new_files_never_open_what_is_already_there() {
     let d = scratch("new");
@@ -337,17 +376,20 @@ mod tests {
   }
 
   /// A folder junction, which any program can make without administrator rights.
+  #[cfg(windows)]
   fn junction(link: &Path, target: &Path) {
     let ok = std::process::Command::new("cmd").args(["/c", "mklink", "/J"]).arg(link).arg(target).stdout(std::process::Stdio::null()).status().unwrap().success();
     assert!(ok, "could not make a junction");
   }
 
+  #[cfg(windows)]
   #[test]
   fn paths_compare_however_they_are_written() {
     assert_eq!(path_key(r"\\?\C:\Users\X\Report.txt"), path_key(r"c:\users\x\report.TXT"));
     assert_ne!(path_key(r"\\?\C:\Windows\System32\Report.txt"), path_key(r"C:\Users\x\Downloads\Report.txt"));
   }
 
+  #[cfg(windows)]
   #[test]
   fn a_link_in_the_folder_cannot_send_a_new_file_elsewhere() {
     let (base, away) = (scratch("link-base"), scratch("link-away"));
@@ -359,6 +401,7 @@ mod tests {
     let _ = (fs::remove_dir(&link), fs::remove_dir_all(&base), fs::remove_dir_all(&away));
   }
 
+  #[cfg(windows)]
   #[test]
   fn the_exact_path_gate_sees_through_links() {
     let (base, away) = (scratch("exact-base"), scratch("exact-away"));
@@ -378,6 +421,7 @@ mod tests {
     let _ = (fs::remove_dir(base.join("link")), fs::remove_dir_all(&base), fs::remove_dir_all(&away));
   }
 
+  #[cfg(windows)]
   #[test]
   fn delete_exact_removes_plain_and_read_only_files() {
     let d = scratch("delete");
@@ -390,6 +434,20 @@ mod tests {
     assert!(delete_exact(&d, &a) && !a.exists());
     assert!(delete_exact(&d, &b) && !b.exists());
     assert!(!delete_exact(&d, &d), "a folder is not deleted this way");
+    let _ = fs::remove_dir_all(&d);
+  }
+
+  #[cfg(not(windows))]
+  #[test]
+  fn the_mac_placeholders_refuse() {
+    let d = scratch("mac");
+    let f = d.join("a.txt");
+    fs::write(&f, b"x").unwrap();
+    assert!(!really_at(&d, &f));
+    assert!(!delete_exact(&d, &f));
+    assert!(f.exists(), "nothing is deleted until the Mac version is written");
+    assert!(create_new(&d, "b.txt").is_err());
+    assert!(!d.join("b.txt").exists());
     let _ = fs::remove_dir_all(&d);
   }
 

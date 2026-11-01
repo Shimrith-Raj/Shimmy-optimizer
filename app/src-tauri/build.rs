@@ -1,6 +1,7 @@
 fn main() {
-  // csc.exe only exists on Windows; a build host without it (a compile check on Linux) skips the sidecar.
-  if cfg!(windows) {
+  // csc.exe only exists on Windows, and the sidecar only runs there. This looks at the target, not the build host, so a
+  // compile check for a Mac from Windows skips it too.
+  if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") && cfg!(windows) {
     sensors_sidecar();
   }
   // Shimmy always runs elevated (PLAN.md). SHIMMY_NO_ADMIN=1 builds without the admin manifest, for tests and

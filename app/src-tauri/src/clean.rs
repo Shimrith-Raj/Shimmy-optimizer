@@ -7,17 +7,23 @@ use serde::Serialize;
 use std::collections::HashSet;
 use std::fs;
 use std::io::Read;
+#[cfg(not(windows))]
+use crate::platform::CommandExt;
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
+#[cfg(windows)]
 use windows::core::{w, PCWSTR};
+#[cfg(windows)]
 use windows::Win32::System::Services::{
   CloseServiceHandle, ControlService, OpenSCManagerW, OpenServiceW, QueryServiceStatus, StartServiceW, SC_HANDLE, SC_MANAGER_CONNECT,
   SERVICE_CONTROL_STOP, SERVICE_QUERY_STATUS, SERVICE_START, SERVICE_STATUS, SERVICE_STATUS_CURRENT_STATE, SERVICE_STOP, SERVICE_STOPPED,
   SERVICE_RUNNING,
 };
+#[cfg(windows)]
 use windows::Win32::UI::Shell::{SHEmptyRecycleBinW, SHQueryRecycleBinW, SHERB_NOCONFIRMATION, SHERB_NOPROGRESSUI, SHERB_NOSOUND, SHQUERYRBINFO};
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -76,10 +82,33 @@ pub fn categories() -> Vec<(&'static str, &'static str)> {
   DEFS.iter().map(|d| (d.id, d.title)).collect()
 }
 
+// The Mac's cleaning list is Phase 5 of the Mac plan. Until then no folder is known, so there are no targets, and `run`
+// cleans nothing.
+#[cfg(not(windows))]
+pub fn known(_var: &str) -> Option<PathBuf> {
+  None
+}
+
+#[cfg(not(windows))]
+pub fn recycle_bin() -> (u64, u64) {
+  (0, 0)
+}
+
+#[cfg(not(windows))]
+pub fn run(_ids: &[String], _running: &HashSet<String>, _progress: &Progress) -> Vec<CatResult> {
+  Vec::new()
+}
+
+#[cfg(not(windows))]
+pub fn restore_point(_what: &str) -> Result<(), String> {
+  Err(crate::platform::NOT_ON_MAC.into())
+}
+
 /// A standard folder, asked of Windows by the name of the environment variable that usually holds it. Never read from
 /// the environment itself: Shimmy deletes as administrator, and a user's own variable (TEMP=D:\, or one set by any
 /// program) could point a clean at a whole drive or at Windows. None when Windows cannot name it, and then the targets
 /// under it are skipped.
+#[cfg(windows)]
 pub fn known(var: &str) -> Option<PathBuf> {
   use windows::Win32::System::Com::CoTaskMemFree;
   use windows::Win32::UI::Shell::{
@@ -239,6 +268,7 @@ fn files(t: &Target, out: &mut Vec<(PathBuf, u64)>) {
 }
 
 /// Bytes and items in the Recycle Bin, across all drives.
+#[cfg(windows)]
 pub fn recycle_bin() -> (u64, u64) {
   let mut info = SHQUERYRBINFO { cbSize: std::mem::size_of::<SHQUERYRBINFO>() as u32, ..Default::default() };
   unsafe {
@@ -396,8 +426,10 @@ fn limited(mut cmd: Command, what: &str, limit: Duration) -> std::io::Result<std
 }
 
 /// Closes a service or Service Control Manager handle when it goes out of scope.
+#[cfg(windows)]
 struct ScHandle(SC_HANDLE);
 
+#[cfg(windows)]
 impl Drop for ScHandle {
   fn drop(&mut self) {
     unsafe {
@@ -407,6 +439,7 @@ impl Drop for ScHandle {
 }
 
 /// Opens a service through the Service Control Manager with the given access.
+#[cfg(windows)]
 fn open_service(name: PCWSTR, access: u32) -> Option<ScHandle> {
   unsafe {
     let scm = ScHandle(OpenSCManagerW(None, None, SC_MANAGER_CONNECT).ok()?);
@@ -415,6 +448,7 @@ fn open_service(name: PCWSTR, access: u32) -> Option<ScHandle> {
 }
 
 /// Polls until the service reaches the state, for at most ten seconds.
+#[cfg(windows)]
 fn wait_for_state(svc: &ScHandle, state: SERVICE_STATUS_CURRENT_STATE) {
   for _ in 0..50 {
     let mut st = SERVICE_STATUS::default();
@@ -426,6 +460,7 @@ fn wait_for_state(svc: &ScHandle, state: SERVICE_STATUS_CURRENT_STATE) {
 }
 
 /// Stops a service and waits until it has stopped. Errors are ignored: a service that is already stopped is fine.
+#[cfg(windows)]
 fn stop_service(name: PCWSTR) {
   let Some(svc) = open_service(name, SERVICE_STOP | SERVICE_QUERY_STATUS) else { return };
   let mut st = SERVICE_STATUS::default();
@@ -435,6 +470,7 @@ fn stop_service(name: PCWSTR) {
 }
 
 /// Starts a service and waits until it is running. Errors are ignored: a service that is already running is fine.
+#[cfg(windows)]
 fn start_service(name: PCWSTR) {
   let Some(svc) = open_service(name, SERVICE_START | SERVICE_QUERY_STATUS) else { return };
   if unsafe { StartServiceW(svc.0, None) }.is_ok() {
@@ -442,6 +478,7 @@ fn start_service(name: PCWSTR) {
   }
 }
 
+#[cfg(windows)]
 pub fn run(ids: &[String], running: &HashSet<String>, progress: &Progress) -> Vec<CatResult> {
   let mut results = Vec::new();
   for d in DEFS.iter().filter(|d| ids.iter().any(|i| i == d.id)) {
@@ -559,6 +596,7 @@ pub fn dism_cleanup(progress: &Progress) -> Result<Dism, String> {
 
 /// Asks System Restore for a restore point named `what`. Needs administrator rights and System Protection on for C:.
 /// Windows itself skips a new point when one was made in the last 24 hours, so the caller keeps to that too.
+#[cfg(windows)]
 pub fn restore_point(what: &str) -> Result<(), String> {
   use windows::Win32::System::Restore::{SRSetRestorePointW, BEGIN_SYSTEM_CHANGE, END_SYSTEM_CHANGE, MODIFY_SETTINGS, RESTOREPOINTINFOW, STATEMGRSTATUS};
   // The struct is packed, so the description is built apart and copied in whole.
@@ -585,6 +623,7 @@ pub fn restore_point(what: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+  #[cfg(windows)]
   #[test]
   fn standard_folders_come_from_windows() {
     let local = super::known("LOCALAPPDATA").unwrap();
@@ -594,6 +633,7 @@ mod tests {
     assert!(super::targets("user-temp")[0].dir.ends_with(r"AppData\Local\Temp"));
   }
 
+  #[cfg(windows)]
   #[test]
   fn slow_programs_are_stopped() {
     let sys = super::known("SystemRoot").unwrap().join("System32");

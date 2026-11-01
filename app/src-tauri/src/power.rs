@@ -5,8 +5,30 @@
 //! the Vivobook (PLAN_premium_features.md, P1 Step 1): no elevation needed, and heat protection's `powercfg /setactive`
 //! leaves the overlay alone.
 use serde::{Deserialize, Serialize};
+#[cfg(windows)]
 use windows::core::GUID;
 
+/// The Mac has no power overlays. This stands in for Windows' GUID so the choosing logic below stays shared.
+#[cfg(not(windows))]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct GUID(u128);
+
+#[cfg(not(windows))]
+impl GUID {
+  pub const fn from_u128(v: u128) -> GUID {
+    GUID(v)
+  }
+
+  pub const fn to_u128(&self) -> u128 {
+    self.0
+  }
+
+  pub const fn zeroed() -> GUID {
+    GUID(0)
+  }
+}
+
+#[cfg(windows)]
 #[link(name = "powrprof", kind = "raw-dylib")]
 unsafe extern "system" {
   fn PowerGetEffectiveOverlayScheme(overlay: *mut GUID) -> u32;
@@ -76,11 +98,23 @@ pub fn from_text(t: &str) -> Option<GUID> {
   u128::from_str_radix(t, 16).ok().map(GUID::from_u128)
 }
 
+#[cfg(not(windows))]
+pub fn current() -> Option<GUID> {
+  None
+}
+
+#[cfg(not(windows))]
+pub fn set(_g: GUID) -> Result<(), String> {
+  Err(crate::platform::NOT_ON_MAC.into())
+}
+
+#[cfg(windows)]
 pub fn current() -> Option<GUID> {
   let mut g = GUID::zeroed();
   (unsafe { PowerGetEffectiveOverlayScheme(&mut g) } == 0).then_some(g)
 }
 
+#[cfg(windows)]
 pub fn set(g: GUID) -> Result<(), String> {
   match unsafe { PowerSetActiveOverlayScheme(g) } {
     0 => Ok(()),

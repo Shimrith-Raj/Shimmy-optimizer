@@ -1,8 +1,11 @@
 //! Startup apps, read and switched through the StartupApproved flags (the same mechanism as Task Manager).
 //! Shimmy runs elevated, so all-users entries can be switched too.
 use serde::Serialize;
+#[cfg(windows)]
 use std::path::PathBuf;
+#[cfg(windows)]
 use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, REG_BINARY};
+#[cfg(windows)]
 use winreg::{RegKey, RegValue};
 
 const RUN: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
@@ -22,11 +25,23 @@ pub struct Entry {
   pub can_toggle: bool,
 }
 
+#[cfg(not(windows))]
+pub fn list() -> Vec<Entry> {
+  Vec::new()
+}
+
+#[cfg(not(windows))]
+pub fn toggle(_name: &str, _sub: &str, _scope: &str, _enable: bool) -> Result<(), String> {
+  Err(crate::platform::NOT_ON_MAC.into())
+}
+
+#[cfg(windows)]
 fn hive(scope: &str) -> RegKey {
   RegKey::predef(if scope == "Machine" { HKEY_LOCAL_MACHINE } else { HKEY_CURRENT_USER })
 }
 
 /// First byte odd means disabled; a missing flag means enabled.
+#[cfg(windows)]
 fn approved(scope: &str, sub: &str, name: &str) -> bool {
   hive(scope)
     .open_subkey(format!(r"{APPROVED}\{sub}"))
@@ -35,6 +50,7 @@ fn approved(scope: &str, sub: &str, name: &str) -> bool {
     .unwrap_or(true)
 }
 
+#[cfg(windows)]
 pub fn list() -> Vec<Entry> {
   let mut out = Vec::new();
   for (scope, key, sub) in [("User", RUN, "Run"), ("Machine", RUN, "Run"), ("Machine", RUN32, "Run32")] {
@@ -75,6 +91,7 @@ pub fn list() -> Vec<Entry> {
   out
 }
 
+#[cfg(windows)]
 pub fn toggle(name: &str, sub: &str, scope: &str, enable: bool) -> Result<(), String> {
   if !["Run", "Run32", "StartupFolder"].contains(&sub) {
     return Err("Unknown startup source.".into());

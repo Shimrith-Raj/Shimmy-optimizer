@@ -4,7 +4,9 @@
 //! and every process is put back the way it was on Exit. Nothing is suspended.
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
+#[cfg(windows)]
 use windows::Win32::Foundation::CloseHandle;
+#[cfg(windows)]
 use windows::Win32::System::Threading::{
   GetPriorityClass, OpenProcess, SetPriorityClass, SetProcessInformation, ProcessPowerThrottling, BELOW_NORMAL_PRIORITY_CLASS, IDLE_PRIORITY_CLASS, NORMAL_PRIORITY_CLASS,
   PROCESS_CREATION_FLAGS, PROCESS_POWER_THROTTLING_CURRENT_VERSION, PROCESS_POWER_THROTTLING_EXECUTION_SPEED, PROCESS_POWER_THROTTLING_STATE,
@@ -61,13 +63,31 @@ pub fn plan(running: &[(u32, String)], wanted: &BTreeMap<String, Level>, applied
   (set, back)
 }
 
+// A Mac process lowered without root cannot be raised again, so this may never come to the Mac. Nothing is changed here.
+#[cfg(not(windows))]
+pub fn original(class: u32) -> u32 {
+  class
+}
+
+#[cfg(not(windows))]
+pub fn apply(_pid: u32, _level: Level) -> Result<u32, String> {
+  Err(crate::platform::NOT_ON_MAC.into())
+}
+
+#[cfg(not(windows))]
+pub fn revert(_pid: u32, _old_class: u32) -> bool {
+  false
+}
+
 /// The class to put a process back to, from the one it had when Shimmy first lowered it. A process already at Below
 /// normal or Low was most likely lowered by an earlier Shimmy that was closed without putting it back (a crash or a
 /// kill: what Shimmy changed is kept only in memory), so it goes back to Normal rather than staying low for good.
+#[cfg(windows)]
 pub fn original(class: u32) -> u32 {
   if class == BELOW_NORMAL_PRIORITY_CLASS.0 || class == IDLE_PRIORITY_CLASS.0 { NORMAL_PRIORITY_CLASS.0 } else { class }
 }
 
+#[cfg(windows)]
 fn throttle(h: windows::Win32::Foundation::HANDLE, on: bool) -> bool {
   // Mask 0 hands the decision back to Windows, which is the default for every process.
   let st = PROCESS_POWER_THROTTLING_STATE {
@@ -79,6 +99,7 @@ fn throttle(h: windows::Win32::Foundation::HANDLE, on: bool) -> bool {
 }
 
 /// Sets the level; returns the priority class the process had before.
+#[cfg(windows)]
 pub fn apply(pid: u32, level: Level) -> Result<u32, String> {
   unsafe {
     let h = OpenProcess(PROCESS_SET_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION, false, pid).map_err(|e| e.message())?;
@@ -93,6 +114,7 @@ pub fn apply(pid: u32, level: Level) -> Result<u32, String> {
 }
 
 /// Puts a process back: its old priority class, and power throttling left to Windows.
+#[cfg(windows)]
 pub fn revert(pid: u32, old_class: u32) -> bool {
   unsafe {
     let Ok(h) = OpenProcess(PROCESS_SET_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else { return false };

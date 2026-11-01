@@ -5,12 +5,15 @@ use regex::Regex;
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::LazyLock;
+#[cfg(windows)]
 use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_32KEY, KEY_WOW64_64KEY};
+#[cfg(windows)]
 use winreg::RegKey;
 
 const UNINSTALL: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall";
 
 /// The three places Windows lists installed apps: (id prefix, hive, view flag).
+#[cfg(windows)]
 fn roots() -> [(&'static str, RegKey, u32); 3] {
   [
     ("HKLM", RegKey::predef(HKEY_LOCAL_MACHINE), KEY_WOW64_64KEY),
@@ -47,6 +50,17 @@ pub fn parse_date(s: &str) -> Option<String> {
   }
 }
 
+#[cfg(not(windows))]
+pub fn list() -> Vec<Installed> {
+  Vec::new()
+}
+
+#[cfg(not(windows))]
+fn entry(_key: &str) -> Result<(String, String), String> {
+  Err(crate::platform::NOT_ON_MAC.into())
+}
+
+#[cfg(windows)]
 fn listed(k: &RegKey) -> Option<(String, String)> {
   let name: String = k.get_value("DisplayName").ok()?;
   let uninstall: String = k.get_value("UninstallString").ok()?;
@@ -58,6 +72,7 @@ fn listed(k: &RegKey) -> Option<(String, String)> {
     .then(|| (name.trim().to_string(), uninstall))
 }
 
+#[cfg(windows)]
 pub fn list() -> Vec<Installed> {
   let mut out: Vec<Installed> = Vec::new();
   for (prefix, hive, view) in roots() {
@@ -127,6 +142,7 @@ pub fn per_user(key: &str) -> bool {
 }
 
 /// The app's name and its uninstall command as listed, read again from the registry for this key.
+#[cfg(windows)]
 fn entry(key: &str) -> Result<(String, String), String> {
   let (prefix, sub) = key.split_once('\\').ok_or("Shimmy does not know that app.")?;
   if sub.is_empty() || sub.contains('\\') {
@@ -280,6 +296,7 @@ The following packages have an upgrade available, but require explicit targeting
     assert!(!valid_id("Git.Git & calc") && !valid_id("--source") && !valid_id(""));
   }
 
+  #[cfg(windows)]
   #[test]
   fn uninstall_commands() {
     assert_eq!(split_command(r#""C:\Program Files\cursor\unins000.exe" /SILENT"#), Some((r"C:\Program Files\cursor\unins000.exe".into(), "/SILENT".into())));
@@ -297,6 +314,7 @@ The following packages have an upgrade available, but require explicit targeting
     let _ = std::fs::remove_file(&planted);
   }
 
+  #[cfg(windows)]
   #[test]
   fn only_trusted_uninstallers_and_winget() {
     assert!(per_user(r"HKCU\{abc}") && !per_user(r"HKLM\{abc}") && !per_user(r"HKLM32\Foo"));

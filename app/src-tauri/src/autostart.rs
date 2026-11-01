@@ -2,19 +2,36 @@
 //! without a UAC prompt (tested in Phase 0). Default task settings refuse to start on battery, so both battery
 //! settings are turned off here.
 use std::path::Path;
+#[cfg(windows)]
 use windows::core::BSTR;
+#[cfg(windows)]
 use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
+#[cfg(windows)]
 use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED};
+#[cfg(windows)]
 use windows::Win32::System::TaskScheduler::{ITaskFolder, ITaskService, TaskScheduler, TASK_CREATE_OR_UPDATE, TASK_LOGON_INTERACTIVE_TOKEN};
+#[cfg(windows)]
 use windows::Win32::System::Variant::VARIANT;
 
 pub const TASK: &str = "Shimmy Optimizer";
 /// Passed by the task so Shimmy starts in the tray instead of opening its window.
 pub const TRAY_ARG: &str = "--tray";
 
+#[cfg(not(windows))]
+pub fn enabled() -> bool {
+  false
+}
+
+#[cfg(not(windows))]
+pub fn set(_on: bool) -> Result<(), String> {
+  Err(crate::platform::NOT_ON_MAC.into())
+}
+
 /// Balances CoInitializeEx. When the thread already has COM in another mode, that is left as it is.
+#[cfg(windows)]
 struct Com(bool);
 
+#[cfg(windows)]
 impl Drop for Com {
   fn drop(&mut self) {
     if self.0 {
@@ -24,6 +41,7 @@ impl Drop for Com {
 }
 
 /// Runs `f` on the root folder of the local Task Scheduler. The COM objects are released before COM is torn down.
+#[cfg(windows)]
 fn with_root<T>(f: impl FnOnce(&ITaskFolder) -> windows::core::Result<T>) -> Result<T, String> {
   let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
   if hr.is_err() && hr != RPC_E_CHANGED_MODE {
@@ -41,6 +59,7 @@ fn with_root<T>(f: impl FnOnce(&ITaskFolder) -> windows::core::Result<T>) -> Res
   run().map_err(|e| e.message())
 }
 
+#[cfg(windows)]
 pub fn enabled() -> bool {
   with_root(|root| unsafe { root.GetTask(&BSTR::from(TASK)).map(|_| ()) }).is_ok()
 }
@@ -76,6 +95,7 @@ fn installed(exe: &std::path::Path, program_files: Option<&std::path::Path>) -> 
   program_files.is_some_and(|pf| exe.starts_with(pf))
 }
 
+#[cfg(windows)]
 pub fn set(on: bool) -> Result<(), String> {
   if !on {
     return if enabled() { with_root(|root| unsafe { root.DeleteTask(&BSTR::from(TASK), 0) }) } else { Ok(()) };

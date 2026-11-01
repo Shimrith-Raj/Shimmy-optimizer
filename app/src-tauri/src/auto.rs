@@ -195,6 +195,16 @@ pub struct Local {
   pub ms: u32,
 }
 
+/// UTC for now: the Mac's local time comes with the rest of its start-up work in Phase 2 of the Mac plan.
+#[cfg(not(windows))]
+pub fn local_now() -> Local {
+  let ms = crate::store::now_ms();
+  let (secs, days) = (ms / 1000, ms / 86_400_000);
+  // 1 January 1970 was a Thursday, day 4 of Windows' Sunday-first week.
+  Local { dow: ((days + 4) % 7) as u32, hour: (secs / 3600 % 24) as u32, min: (secs / 60 % 60) as u32, sec: (secs % 60) as u32, ms: (ms % 1000) as u32 }
+}
+
+#[cfg(windows)]
 pub fn local_now() -> Local {
   let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
   Local { dow: t.wDayOfWeek as u32, hour: t.wHour as u32, min: t.wMinute as u32, sec: t.wSecond as u32, ms: t.wMilliseconds as u32 }

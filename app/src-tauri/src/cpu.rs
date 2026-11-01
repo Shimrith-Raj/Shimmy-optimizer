@@ -4,8 +4,11 @@
 use crate::sensors::{value, Reading};
 use serde::Serialize;
 use std::collections::HashMap;
+#[cfg(windows)]
 use windows::core::w;
+#[cfg(windows)]
 use windows::Win32::System::Performance::{PdhAddEnglishCounterW, PdhCloseQuery, PdhCollectQueryData, PdhOpenQueryW, PDH_HCOUNTER, PDH_HQUERY};
+#[cfg(windows)]
 use windows::Win32::System::SystemInformation::{GetLogicalProcessorInformationEx, RelationProcessorCore, SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX};
 
 #[derive(Serialize, Debug)]
@@ -68,7 +71,33 @@ pub fn status(temp: Option<f64>, load: f32, avg_clock: Option<f64>, base: Option
   }
 }
 
+// The Mac's core map and clocks are Phase 4 of the Mac plan. Load still comes from sysinfo.
+#[cfg(not(windows))]
+pub fn base_mhz() -> Option<f64> {
+  None
+}
+
+#[cfg(not(windows))]
+pub fn topology() -> Option<Topology> {
+  None
+}
+
+#[cfg(not(windows))]
+pub struct Perf;
+
+#[cfg(not(windows))]
+impl Perf {
+  pub fn open() -> Result<Perf, String> {
+    Err(crate::platform::NOT_ON_MAC.into())
+  }
+
+  pub fn sample(&mut self) -> HashMap<(u16, u16), Clock> {
+    HashMap::new()
+  }
+}
+
 /// The rated clock Windows records for the processor (HKLM ... CentralProcessor\0, "~MHz").
+#[cfg(windows)]
 pub fn base_mhz() -> Option<f64> {
   use winreg::{enums::HKEY_LOCAL_MACHINE, RegKey};
   RegKey::predef(HKEY_LOCAL_MACHINE)
@@ -150,6 +179,7 @@ impl Topology {
 }
 
 /// The core map from Windows. None when the call fails (the caller then shows each logical processor on its own).
+#[cfg(windows)]
 pub fn topology() -> Option<Topology> {
   const LTP_PC_SMT: u8 = 0x1;
   unsafe {
@@ -216,6 +246,7 @@ fn parse_instance(name: &str) -> Option<(u16, u16)> {
 }
 
 /// A long-lived PDH query: "% Processor Performance" is a rate, so each read compares with the previous one.
+#[cfg(windows)]
 pub struct Perf {
   query: PDH_HQUERY,
   perf: PDH_HCOUNTER,
@@ -223,8 +254,10 @@ pub struct Perf {
 }
 
 // Only the sampler thread uses it.
+#[cfg(windows)]
 unsafe impl Send for Perf {}
 
+#[cfg(windows)]
 impl Perf {
   pub fn open() -> Result<Perf, String> {
     unsafe {
@@ -261,6 +294,7 @@ impl Perf {
   }
 }
 
+#[cfg(windows)]
 impl Drop for Perf {
   fn drop(&mut self) {
     unsafe {

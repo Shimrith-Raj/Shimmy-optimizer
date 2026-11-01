@@ -1,5 +1,6 @@
 //! Read-only runs against this PC's real folders. Ignored by default; run with
-//! `cargo test --test real_scan -- --ignored --nocapture`. Nothing is deleted.
+//! `cargo test --test real_scan -- --ignored --nocapture`. Nothing is deleted. Windows only, for now.
+#![cfg(windows)]
 use shimmy_lib::jobs::Progress;
 use shimmy_lib::{clean, finder, storage};
 use std::path::PathBuf;
