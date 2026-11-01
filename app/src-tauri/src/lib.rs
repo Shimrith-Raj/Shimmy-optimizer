@@ -2266,6 +2266,9 @@ fn automation(app: &AppHandle, s: &Shr, tick: u64) {
     if w.cpu.step(temp.is_some_and(|t| t >= a.cpu_temp_c as f64), now, 30_000, 30 * MIN) {
       alert(app, s, "The processor is running hot", &format!("{:.0} °C for half a minute. Check the vents are clear and nothing is stuck at full load.", temp.unwrap_or(0.0)));
     }
+    // There is no C: on a Mac, where `space` reads 0 and this would warn at the very first tick. The Mac version of this
+    // alert comes with the Mac Home page (Phase 4 of the Mac plan).
+    #[cfg(windows)]
     if tick % 100 == 0 {
       let free_gb = storage::space("C:\\").1 / 1_073_741_824;
       if w.disk.step(free_gb < a.disk_free_gb as u64, now, 0, 6 * 60 * MIN) {
@@ -2518,6 +2521,9 @@ pub fn run() {
         let _ = store::write_atomic(&settings_path.with_extension("json.bad"), settings_text.as_deref().unwrap_or("").as_bytes());
         store.log("settings-repaired", "settings.json", &format!("part of it could not be read, so that part is back to its default; the old file is settings.json.bad ({problem})"));
       }
+      // RAM Optimizer v0.2 only ever ran on Windows. On a Mac, looking in the Desktop folder would also make macOS ask the
+      // user for permission to read it, at the very first start.
+      #[cfg(windows)]
       if let Ok(desktop) = app.path().desktop_dir() {
         if let Some(what) = store.import_old(&desktop.join("RAM Optimizer").join("data")) {
           store.log("import", "RAM Optimizer v0.2", &format!("Imported {what}"));
@@ -2529,7 +2535,14 @@ pub fn run() {
       let sensor_state = sensors::SensorState::default();
       let model = asus::model();
       let topology = cpu::topology().unwrap_or_else(|| cpu::Topology::single_threads(sys.cpus().len()));
-      sensors::start(app.path().resource_dir()?.join("sensors").join("shimmy-sensors.exe"), sensor_state.clone());
+      // A Mac build run straight from the build folder has no resource folder, and the Mac has no sidecar to find there
+      // anyway, so a missing one must not stop Shimmy from starting.
+      let resources = app.path().resource_dir();
+      #[cfg(windows)]
+      let resources = resources?;
+      #[cfg(not(windows))]
+      let resources = resources.unwrap_or_default();
+      sensors::start(resources.join("sensors").join("shimmy-sensors.exe"), sensor_state.clone());
       app.manage::<Shr>(Arc::new(Shared {
         sys: Mutex::new(sys),
         store,

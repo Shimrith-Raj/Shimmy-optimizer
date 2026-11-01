@@ -36,6 +36,7 @@ tests it.
 1. **Test the riskiest parts on a real Mac:** sensors, GPU readings, safe deletes, Connections without root, Full Disk
    Access. What fails moves to the removed list before more is built. Run the shared tests there too; some were written
    with Windows paths in mind (`net.rs` labels, the `lib.rs` settings test, `tests/parity.rs`) and may need Mac versions.
+   The Phase 1 probes live in `spike/mac` and run in `.github/workflows/macos.yml`; results are added later.
 2. **Mac foundation:** window, menu bar icon, data folder, settings, local time, start at login.
 3. **Safety code, before any feature can delete or close anything:** `really_at`, `delete_exact` and `create_new` for Mac
    file handling; `classify()` with Mac protected-process lists and a rule for root-owned processes (the Windows service

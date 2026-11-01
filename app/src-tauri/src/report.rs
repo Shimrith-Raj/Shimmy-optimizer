@@ -277,6 +277,9 @@ mod tests {
     assert!(t.contains("2 ports listening (1 for this PC only)"), "{t}");
   }
 
+  // Saving goes through `store::write_new`, which refuses everything on the Mac until its Mac version is written (Phase 3
+  // of the Mac plan), so there is nothing to save to on a Mac yet. The refusal itself is tested in store.rs.
+  #[cfg(windows)]
   #[test]
   fn two_reports_in_one_second_both_save() {
     let d = std::env::temp_dir().join(format!("shimmy-report-test-{}", std::process::id()));

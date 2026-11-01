@@ -1,0 +1,21 @@
+# Phase 1 of the Mac port (PLAN_mac.md): finds out what really works on a Mac before more is built. It stands alone
+# (its own workspace and lock file) and shares nothing with the app. The dependency versions match the app's.
+[package]
+name = "mac-probe"
+version = "0.1.0"
+description = "Read-only checks of what works on a real Mac, for Shimmy Optimizer's Mac port"
+edition = "2024"
+rust-version = "1.90"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "mac-probe"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+serde_json = "1.0"
+sysinfo = "0.38"
+trash = "5.2.9"

@@ -118,6 +118,8 @@ pub fn set(on: bool) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+  // Windows paths: on a Mac, "C:\Program Files\..." is a single folder name, so the comparison means nothing there.
+  #[cfg(windows)]
   #[test]
   fn only_an_installed_copy_starts_with_windows() {
     use std::path::Path;

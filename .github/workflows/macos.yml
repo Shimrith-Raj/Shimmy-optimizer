@@ -1,0 +1,203 @@
+# Phase 1 of the Mac port (PLAN_mac.md): there is no Mac to test on except GitHub's runners, so this runs the tests, builds
+# the app, starts it, and runs the read-only probe in spike/mac on both kinds of Mac (Apple Silicon and Intel).
+# The runners are virtual machines: their results say what builds and links, and what the probe can see on them, not
+# everything a real Mac does. The probe's report says which kind of machine each result came from.
+name: macOS
+
+on:
+  push:
+    branches: [macos-version]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mac:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            label: Apple Silicon (macos-15)
+            machine: apple-silicon
+          - os: macos-15-intel
+            label: Intel (macos-15-intel)
+            machine: intel
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Rust
+        run: |
+          rustup update stable
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      - name: Which machine
+        run: |
+          echo "uname -m: $(uname -m)"
+          echo "model: $(sysctl -n hw.model)"
+          echo "virtual machine: $(sysctl -n kern.hv_vmm_present 2>/dev/null || echo unknown)"
+          sw_vers
+
+      - name: Tests
+        if: always()
+        working-directory: app/src-tauri
+        env:
+          SHIMMY_NO_ADMIN: "1"
+        run: cargo test
+
+      - name: Install npm packages
+        if: always()
+        working-directory: app
+        run: npm ci
+
+      - name: Build the app
+        id: build
+        if: always()
+        working-directory: app
+        run: npx tauri build --no-bundle
+
+      - name: Start the app
+        if: always() && steps.build.outcome == 'success'
+        run: |
+          bin="app/src-tauri/target/release/shimmy-optimizer"
+          if [ ! -x "$bin" ]; then
+            echo "::error::the built app is not where it should be: $bin"
+            ls -la app/src-tauri/target/release | head -30
+            exit 1
+          fi
+          log="$RUNNER_TEMP/shimmy-smoke.log"
+          data="$HOME/Library/Application Support/com.shimmy.optimizer"
+          if pgrep -x WindowServer > /dev/null; then window_server=yes; else window_server=no; fi
+          echo "A window server is running: $window_server"
+          # A fresh start, so the log below is only this run's.
+          rm -rf "$data"
+          RUST_BACKTRACE=1 "$bin" > "$log" 2>&1 &
+          pid=$!
+          sleep 20
+          set +e
+          if kill -0 "$pid" 2> /dev/null; then alive=yes; else alive=no; fi
+          echo "Still running after 20 s: $alive"
+          echo "--- what the app printed ---"
+          cat "$log"
+          echo "--- Shimmy's own log ---"
+          cat "$data/actions-log.csv" 2> /dev/null || echo "(no log was written)"
+          {
+            echo "### App start on ${{ matrix.label }}"
+            echo
+            echo "- A window server was running: $window_server"
+            echo "- The app was still running after 20 s: $alive"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$alive" = yes ]; then
+            kill "$pid"
+            sleep 2
+            kill -9 "$pid" 2> /dev/null
+            exit 0
+          fi
+          wait "$pid"
+          code=$?
+          echo "The app exited with code $code"
+          echo "- It exited with code $code" >> "$GITHUB_STEP_SUMMARY"
+          for f in $(ls -t "$HOME"/Library/Logs/DiagnosticReports/ 2> /dev/null | grep -i shimmy | head -1); do
+            echo "--- crash report $f (first lines) ---"
+            head -60 "$HOME/Library/Logs/DiagnosticReports/$f"
+          done
+          if [ "$window_server" = no ]; then
+            # Reported, not failed: with no window server the app cannot open a window, which says nothing about the build.
+            echo "::warning::The app stopped, and this runner has no window server. That is a result, not a build failure."
+            echo "- There was no window server, so this is reported and not failed." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "::error::The app stopped within 20 s of starting."
+          exit 1
+
+      - name: Probe
+        if: always()
+        run: |
+          # A listener owned by root, so the probe can see what a normal user can and cannot see of root's sockets.
+          listener_dir="$RUNNER_TEMP/listener"
+          mkdir -p "$listener_dir"
+          cd "$listener_dir"
+          sudo "$(command -v python3)" -m http.server 8765 --bind 127.0.0.1 > "$RUNNER_TEMP/listener.log" 2>&1 &
+          cd "$GITHUB_WORKSPACE"
+          trap 'sudo pkill -f "http.server 8765" || true' EXIT
+          sleep 3
+          echo "root listener answers: $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8765/ || true)"
+          cd spike/mac
+          # Never with sudo: the probe has to see what Shimmy would see.
+          PROBE_ROOT_PORT=8765 cargo run --release
+
+      - name: Upload the probe report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-probe-${{ matrix.machine }}
+          path: |
+            spike/mac/mac-probe-report.md
+            spike/mac/mac-probe-report.json
+          if-no-files-found: warn
+
+      - name: Add the probe report to the run summary
+        if: always()
+        run: |
+          if [ -f spike/mac/mac-probe-report.md ]; then
+            cat spike/mac/mac-probe-report.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "The probe wrote no report on ${{ matrix.label }}." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  universal:
+    name: One app for both (universal)
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Rust, with both Mac targets
+        run: |
+          rustup update stable
+          rustup default stable
+          rustup target add x86_64-apple-darwin aarch64-apple-darwin
+
+      - name: Install npm packages
+        working-directory: app
+        run: npm ci
+
+      - name: Build the universal app
+        working-directory: app
+        run: npx tauri build --target universal-apple-darwin --no-bundle
+
+      - name: Both architectures are in it
+        run: |
+          bin="$(find app/src-tauri/target -path '*universal-apple-darwin*' -type f -name shimmy-optimizer | head -n 1)"
+          if [ -z "$bin" ]; then
+            echo "::error::no universal app was built"
+            find app/src-tauri/target -maxdepth 3 -name 'shimmy-optimizer*' -type f
+            exit 1
+          fi
+          archs="$(lipo -archs "$bin")"
+          echo "$bin has: $archs"
+          echo "### Universal app: $archs" >> "$GITHUB_STEP_SUMMARY"
+          case " $archs " in *" x86_64 "*) ;; *) echo "::error::x86_64 is missing"; exit 1 ;; esac
+          case " $archs " in *" arm64 "*) ;; *) echo "::error::arm64 is missing"; exit 1 ;; esac
