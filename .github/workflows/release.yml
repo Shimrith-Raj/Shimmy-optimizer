@@ -1,11 +1,17 @@
 name: Release
 
-# Builds the Windows installer when a version tag (v1.2.3) is pushed and attaches it to a GitHub release as
+# Builds the Windows installer when a version tag (v1.2.3) is pushed, or when run by hand with the version, and attaches
+# it to a GitHub release (creating the tag on the commit it built) as
 # Shimmy-Optimizer-Setup.exe, the name the download buttons and the Updates page expect. Notes come from
 # docs/releases/<tag>.md, with the installer's SHA-256 added at the end.
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Tag to release, for example v0.9.0'
+        required: true
 
 permissions:
   contents: write
@@ -13,6 +19,8 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -24,8 +32,8 @@ jobs:
         shell: bash
         run: |
           v=$(node -p "require('./app/src-tauri/tauri.conf.json').version")
-          test "v$v" = "$GITHUB_REF_NAME" || { echo "Tag $GITHUB_REF_NAME does not match version $v"; exit 1; }
-          test -f "docs/releases/$GITHUB_REF_NAME.md" || { echo "Missing docs/releases/$GITHUB_REF_NAME.md"; exit 1; }
+          test "v$v" = "$TAG" || { echo "Tag $TAG does not match version $v"; exit 1; }
+          test -f "docs/releases/$TAG.md" || { echo "Missing docs/releases/$TAG.md"; exit 1; }
 
       - name: Build the installer
         working-directory: app
@@ -44,5 +52,5 @@ jobs:
           exe=$(ls app/src-tauri/target-ship/release/bundle/nsis/*_x64-setup.exe)
           cp "$exe" Shimmy-Optimizer-Setup.exe
           sum=$(sha256sum Shimmy-Optimizer-Setup.exe | cut -d' ' -f1)
-          { cat "docs/releases/$GITHUB_REF_NAME.md"; echo; echo "SHA-256 of \`Shimmy-Optimizer-Setup.exe\`: \`$sum\`"; echo; echo "Shimmy Optimizer is founded and built by **Shimrith Raj** and released under the MIT licence."; } > notes.md
-          gh release create "$GITHUB_REF_NAME" Shimmy-Optimizer-Setup.exe --title "Shimmy Optimizer ${GITHUB_REF_NAME#v}" --notes-file notes.md
+          { cat "docs/releases/$TAG.md"; echo; echo "SHA-256 of \`Shimmy-Optimizer-Setup.exe\`: \`$sum\`"; echo; echo "Shimmy Optimizer is founded and built by **Shimrith Raj** and released under the MIT licence."; } > notes.md
+          gh release create "$TAG" Shimmy-Optimizer-Setup.exe --title "Shimmy Optimizer ${TAG#v}" --notes-file notes.md --target "$GITHUB_SHA"
