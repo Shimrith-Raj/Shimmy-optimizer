@@ -151,7 +151,11 @@ fn connections() {
 #[test]
 #[ignore]
 fn set_limit() {
-  let pct: u32 = std::env::var("SHIMMY_LIMIT").expect("SHIMMY_LIMIT").parse().unwrap();
+  let Ok(pct) = std::env::var("SHIMMY_LIMIT") else {
+    println!("SHIMMY_LIMIT is not set, so the charge limit is left alone");
+    return;
+  };
+  let pct: u32 = pct.parse().unwrap();
   let atk = shimmy_lib::asus::Atk::open().expect("ATKACPI");
   println!("DSTS before: {:?}", atk.get(shimmy_lib::asus::CHARGE_LIMIT).map(|v| format!("{v:#x}")));
   println!("DEVS {pct} answered: {:?}", atk.set(shimmy_lib::asus::CHARGE_LIMIT, pct));

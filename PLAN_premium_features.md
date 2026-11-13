@@ -166,8 +166,24 @@ Each phase ends with unit tests for any new gate, an installer, and screenshots.
 1. A2 defaults: Best performance on the charger, Balanced on battery, off until switched on (2026-10-29).
 2. A8: `winget` accepted; the feature hides where it is missing (built in P2).
 
-## Still to check on the laptop (before releasing v0.9.0)
-Nothing below has run on the real, elevated, installed build yet.
+## P3 checked on the laptop (2026-11-13, installed 0.9.0 over 0.8.0, elevated)
+- **Tests:** 136 unit + 2 parity pass; `real_scan -- --ignored` 11 of 11. `set_limit` used to panic when `SHIMMY_LIMIT`
+  was not set (before touching the firmware); it now skips with a message.
+- **Data folder:** passed. The first start made `C:\ProgramData\Shimmy Optimizer\com.shimmy.optimizer`; a standard user
+  is refused even a listing of it. The outer folder lets Users read only. The old `%APPDATA%` copy stays as it was.
+  Settings came across: power mode followed the charger (Best performance), Run from the charger held again at 50 %,
+  heat protection on, and weekly clean and automatic memory clean were off (they already were in 0.8.0).
+- **A10 report:** passed. `--report` from a standard PowerShell asks for elevation, then prints into that terminal (it
+  finds the parent's console), so it does not save to Downloads from there; it saves only when there is no console.
+  The report shows 65 C and 24 W package power, fans, power mode and connections.
+- **A12:** the counts match `netstat -ano` taken a moment apart: 31 internet connections in both; 27 against 26
+  listening sockets and 5 against 4 for this PC only (one loopback listener came or went between the two).
+- **Not checked, because the installed Shimmy is elevated and the test harness cannot click it:** A3 restore point on
+  the first DISM clean-up, A5 cooling check (stop at 95 C or on Stop, heat protection during it), the sensor log's
+  temperatures and power, the Connections page's cost while open, the uninstaller and `--reset-limit`, and Exit lifting
+  a Run from the charger hold. Released first at the owner's choice; to do by hand on the laptop.
+
+## Laptop checklist for v0.9.0 (results in the section above)
 - **Data folder move:** the first start moves `%APPDATA%\com.shimmy.optimizer` to the admins-only folder; settings, history
   and the Log come across, and unattended work starts off as designed.
 - **A3 restore point:** the Log shows a point made (or why not) on the first DISM clean-up.

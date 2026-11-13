@@ -127,6 +127,13 @@ models, Shimmy warns you once before its first firmware change and changes nothi
 - **Connections:** which app holds which network connection right now, TCP and UDP, internet first. Read only:
   addresses are not looked up, traffic is not measured and the firewall is never touched
 
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/system.png" alt="System page: processor, memory, graphics and Windows version, with Save a report and the sensor log"></td>
+<td width="50%"><img src="docs/screenshots/connections.png" alt="Connections page: which app holds which network connection, internet first, read only"></td>
+</tr>
+</table>
+
 ### ⚙️ Everything else
 - Startup apps on or off (including all-users entries), a full action log you can audit, alerts for memory, heat, disk
   and battery, a weekly automatic clean, and Start with Windows straight into the tray
