@@ -69,18 +69,19 @@ TreeSize sell are already granted by the MIT licence.
 
 ## Phases
 
-| # | What | Release |
-|---|---|---|
-| P1 | **Quick wins:** A1 System info, A2 Power mode follows the charger, A3 Restore point first, A4 Export, A5 Cooling check, A6 Junk alert, A7 Recent items | v0.7.0 |
-| P2 | **Apps:** A8 App updates, A9 Installed apps, A11 Background priority | v0.8.0 |
-| P3 | **Monitoring extras:** A10 Sensor log and report, A12 Connections now | v0.9.0 |
+| # | What | Release | State |
+|---|---|---|---|
+| P1 | **Quick wins:** A1 System info, A2 Power mode follows the charger, A3 Restore point first, A4 Export, A5 Cooling check, A6 Junk alert, A7 Recent items | v0.8.0 (shipped with P2) | Built, bug-swept, merged |
+| P2 | **Apps:** A8 App updates, A9 Installed apps, A11 Background priority | v0.8.0 | Built, bug-swept, merged |
+| P3 | **Monitoring extras:** A10 Sensor log and report, A12 Connections now | v0.9.0 | Built, security- and bug-swept, compile-checked; branch `premium-p3` |
+
+All twelve features (A1 to A12) are built. What is left is checking on the real laptop (below) and releasing v0.9.0.
 
 Where a Windows API's behaviour is not yet proven, a phase starts with a short **Step 1 test on the Vivobook**, as Phases 7
 and 9 did. The API names here are from the docs and still need checking against the `windows` crate version in `Cargo.toml`.
 Each phase ends with unit tests for any new gate, an installer, and screenshots.
 
-**Before P1:** merge Phase 10. 10a (marks), 10b+10c and 10d sit on three branches with overlapping version numbers and
-changes to `lib.rs`, `app.js` and `PLAN.md`.
+**Before P1:** merge Phase 10 (done: 10a to 10d merged, v0.5.1).
 
 ## P1 Step 1 results (run 2026-10-29, on battery, not elevated)
 
@@ -125,7 +126,7 @@ changes to `lib.rs`, `app.js` and `PLAN.md`.
 - **A12:** `GetExtendedTcpTable` and `GetExtendedUdpTable` are in the `windows` crate (`Win32_NetworkManagement_IpHelper`).
   The tables gave 117 sockets in about 3 ms and matched `netstat -ano` exactly: 39 connected, 27 listening, 9 closing, 42 UDP.
 
-## P3 built (2026-10-30, v0.9.0, branch `premium-p3`, not committed or released)
+## P3 built (2026-10-30, v0.9.0, branch `premium-p3`, committed, not released)
 
 - **A12** `net.rs` + Connections page: every TCP and UDP socket, IPv4 and IPv6, by app, with the internet first. Addresses are
   not looked up, so the page makes no network use, and traffic is not measured. Sockets of this PC talking to itself are
@@ -153,7 +154,27 @@ changes to `lib.rs`, `app.js` and `PLAN.md`.
 2. **A2 and heat protection** both change power settings. Heat protection keeps priority, and both are restored on every exit path.
 3. **A5 runs the processor hot on purpose.** It stops at 95 °C, after 120 s at most, or on Stop, and never runs on its own.
 4. **A8 and A9 run other programs' installers and uninstallers.** Each runs only after a confirm, one at a time, and is logged.
+   Uninstallers must sit in trusted locations (bug sweep).
+5. **A10 writes files into Downloads as administrator.** Every file goes through `store::create_new`, so a planted link
+   cannot redirect it, and the log stops at 100 MB or on a write error.
+6. **A12 shows other apps' connections.** It is read only: addresses are not looked up, traffic is not measured and the
+   firewall is never touched, so the page makes no network use of its own.
+7. **PowerShell as administrator** (A1, A3, A10): only through `clean::powershell`, with module auto-loading off, so a
+   module planted in the user's Documents cannot run (security sweep, 2026-10-30).
 
-## Questions for the owner
-1. A2: which power mode for the charger and which for battery by default?
-2. A8: is `winget` acceptable, given it is missing on some older Windows 10 installs (the feature hides there)?
+## Questions for the owner (answered)
+1. A2 defaults: Best performance on the charger, Balanced on battery, off until switched on (2026-10-29).
+2. A8: `winget` accepted; the feature hides where it is missing (built in P2).
+
+## Still to check on the laptop (before releasing v0.9.0)
+Nothing below has run on the real, elevated, installed build yet.
+- **Data folder move:** the first start moves `%APPDATA%\com.shimmy.optimizer` to the admins-only folder; settings, history
+  and the Log come across, and unattended work starts off as designed.
+- **A3 restore point:** the Log shows a point made (or why not) on the first DISM clean-up.
+- **A5 cooling check:** stops at 95 °C or on Stop, and heat protection still acts during it.
+- **A10:** temperatures and package power appear in the sensor log and the report; `--report` from a non-elevated terminal
+  saves to Downloads.
+- **A12:** the Connections page matches `netstat -ano` and costs little while open.
+- `cargo test` (138 tests) and `cargo test --test real_scan -- --ignored`.
+- Then: version check (`Cargo.toml`, `tauri.conf.json` at 0.9.0), installer, screenshots of the Connections and System
+  pages for the README, release as `v0.9.0` with the asset named `Shimmy-Optimizer-Setup.exe`.
