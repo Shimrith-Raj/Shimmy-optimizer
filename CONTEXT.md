@@ -43,6 +43,8 @@ Data lives in `%ProgramData%\Shimmy Optimizer\com.shimmy.optimizer\` (administra
 ## Building
 - **Installer:** `cd app` then `CARGO_TARGET_DIR=target-ship npx tauri build` (the Tauri CLI resolves the folder from `src-tauri`, so
   `src-tauri/target-ship` would land in `src-tauri/src-tauri/target-ship`). Output: `src-tauri/target-ship/release/bundle/nsis/Shimmy Optimizer_<version>_x64-setup.exe`, unsigned, per-machine.
+- **Releasing:** write `docs/releases/v<version>.md`, then push the tag `v<version>`. `.github/workflows/release.yml` builds the
+  installer on GitHub's Windows runner, checks the tag matches `tauri.conf.json`, and publishes the release with the installer and its SHA-256.
 - **Publishing:** installers never go in the repo. Attach the installer to a GitHub release (tag `v<version>`) renamed to
   exactly `Shimmy-Optimizer-Setup.exe`: the download buttons in `README.md` and `DOWNLOAD.md` link to
   `releases/latest/download/Shimmy-Optimizer-Setup.exe`, so any other name breaks them.
