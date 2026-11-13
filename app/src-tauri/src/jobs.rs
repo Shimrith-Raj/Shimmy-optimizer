@@ -65,6 +65,15 @@ pub fn start<T: Send + 'static>(slot: &Slot<T>, work: impl FnOnce(Progress) -> R
   true
 }
 
+/// Hands a job a fresh result from elsewhere. A scan of its own that is still running stays marked as running, so a
+/// second one cannot start beside it.
+pub fn set_result<T>(slot: &Slot<T>, result: T) {
+  let mut j = slot.lock().unwrap();
+  j.result = Some(result);
+  j.error = None;
+  j.at = crate::store::now_ms();
+}
+
 /// Drops a finished job's result (to free memory); a running job is left alone.
 pub fn clear<T>(slot: &Slot<T>) {
   let mut j = slot.lock().unwrap();

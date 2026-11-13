@@ -69,18 +69,19 @@ TreeSize sell are already granted by the MIT licence.
 
 ## Phases
 
-| # | What | Release |
-|---|---|---|
-| P1 | **Quick wins:** A1 System info, A2 Power mode follows the charger, A3 Restore point first, A4 Export, A5 Cooling check, A6 Junk alert, A7 Recent items | v0.7.0 |
-| P2 | **Apps:** A8 App updates, A9 Installed apps, A11 Background priority | v0.8.0 |
-| P3 | **Monitoring extras:** A10 Sensor log and report, A12 Connections now | v0.9.0 |
+| # | What | Release | State |
+|---|---|---|---|
+| P1 | **Quick wins:** A1 System info, A2 Power mode follows the charger, A3 Restore point first, A4 Export, A5 Cooling check, A6 Junk alert, A7 Recent items | v0.8.0 (shipped with P2) | Built, bug-swept, merged |
+| P2 | **Apps:** A8 App updates, A9 Installed apps, A11 Background priority | v0.8.0 | Built, bug-swept, merged |
+| P3 | **Monitoring extras:** A10 Sensor log and report, A12 Connections now | v0.9.0 | Built, security- and bug-swept, compile-checked; branch `premium-p3` |
+
+All twelve features (A1 to A12) are built. What is left is checking on the real laptop (below) and releasing v0.9.0.
 
 Where a Windows API's behaviour is not yet proven, a phase starts with a short **Step 1 test on the Vivobook**, as Phases 7
 and 9 did. The API names here are from the docs and still need checking against the `windows` crate version in `Cargo.toml`.
 Each phase ends with unit tests for any new gate, an installer, and screenshots.
 
-**Before P1:** merge Phase 10. 10a (marks), 10b+10c and 10d sit on three branches with overlapping version numbers and
-changes to `lib.rs`, `app.js` and `PLAN.md`.
+**Before P1:** merge Phase 10 (done: 10a to 10d merged, v0.5.1).
 
 ## P1 Step 1 results (run 2026-10-29, on battery, not elevated)
 
@@ -94,7 +95,7 @@ changes to `lib.rs`, `app.js` and `PLAN.md`.
 - **A3:** not testable without elevation. `SRSetRestorePointW` needs the `Win32_System_Restore` feature. Failures
   (protection off, one-per-24 h) are logged and shown, and the clean-up still runs.
 
-## P1 built (2026-10-29, v0.7.0, not committed or released)
+## P1 built (2026-10-29, released in v0.8.0)
 
 - **A1** `hw.rs` + System page: one hidden PowerShell CIM query (about 5 s, kept until the window closes), VRAM from the
   display class keys, drives from `Get-PhysicalDisk`. No serials. Copy uses the WebView clipboard. Sticks are numbered by
@@ -108,7 +109,7 @@ changes to `lib.rs`, `app.js` and `PLAN.md`.
 - **A6** `alerts.junkGb` (default 5 GB, 0 is off): hourly scan on its own thread, at most once a day.
 - **A7** clean category `recent`, off by default, to the Recycle Bin, keeps Explorer's Quick access jump list.
 
-## P2 built (2026-10-30, not committed or released)
+## P2 built (2026-10-30, released in v0.8.0)
 
 - **Step 1:** winget 1.29 lists 24 updates in about 5 s; 66 apps in the Uninstall keys (46 with a size, 12 MSI); install
   dates come as `20261028` or `5/13/2026`.
@@ -119,7 +120,33 @@ changes to `lib.rs`, `app.js` and `PLAN.md`.
 - **A11** `prio.rs`: Below normal, Low, Efficiency mode (Low + EcoQoS). Set per app in its expanded row on the Apps page,
   same built-in gate as Safe marks, applied every 30 s to new processes, put back on Exit. Not reverted after a crash
   (Windows keeps a process's priority until it exits).
-- Version still 0.7.0: bump to 0.8.0 if P1 and P2 ship separately.
+
+## P3 Step 1 results (run 2026-10-30, not elevated)
+
+- **A12:** `GetExtendedTcpTable` and `GetExtendedUdpTable` are in the `windows` crate (`Win32_NetworkManagement_IpHelper`).
+  The tables gave 117 sockets in about 3 ms and matched `netstat -ano` exactly: 39 connected, 27 listening, 9 closing, 42 UDP.
+
+## P3 built (2026-10-30, v0.9.0, branch `premium-p3`, committed, not released)
+
+- **A12** `net.rs` + Connections page: every TCP and UDP socket, IPv4 and IPv6, by app, with the internet first. Addresses are
+  not looked up, so the page makes no network use, and traffic is not measured. Sockets of this PC talking to itself are
+  hidden behind a tick. Also exported as CSV. Refreshes every 5 s, only while the page is open.
+- **A10 sensor log** `senselog.rs` + System page: ticked readings to a new CSV in Downloads, every 2 s to 5 min, up to 40
+  columns. Every row is flushed. It stops on Stop, on Exit, on a write error or at 100 MB, and does not resume after a
+  restart. Graphics chips are left out, because the sensor reader leaves them out to let the RTX sleep. Shimmy's own
+  readings (use, clock, memory, battery, fans) work without administrator rights.
+- **A10 report** `report.rs`: `--report` and Save a report on the System page. No serials, user name or addresses. It takes
+  about 15 s from the command line, because it reads the inventory and starts its own sensor reader. It prints to a redirect,
+  a pipe or the terminal that started it. A windowed program does not hold the prompt, so the prompt comes back first and
+  the report follows. With nowhere to print, it saves to Downloads and shows the file.
+- **Security sweep (2026-10-30, Cloudflare's security-audit skill, focused review of P3):** PowerShell now runs only
+  through `clean::powershell` (module auto-loading off, modules by full path), because it looked in the user's Documents
+  first, so a planted module would have run as administrator. Data moved from `%APPDATA%` to an admins-only folder
+  (`data_dir`), and files in Downloads go through `store::create_new`, so a planted link cannot make Shimmy overwrite a
+  system file. Connections counts leave out closing sockets, a copied Windows exe name loses the Windows label, and
+  loopback-only ports say so. The fake-module attack was rerun with the fix and no longer runs.
+- **Not yet run elevated:** the move to the protected folder, and temperatures and package power in the log and report. From a non-elevated terminal the installed
+  build asks for elevation and has no console to borrow, so that path should save to Downloads: check it on first real use.
 
 ## Risks
 
@@ -127,7 +154,27 @@ changes to `lib.rs`, `app.js` and `PLAN.md`.
 2. **A2 and heat protection** both change power settings. Heat protection keeps priority, and both are restored on every exit path.
 3. **A5 runs the processor hot on purpose.** It stops at 95 °C, after 120 s at most, or on Stop, and never runs on its own.
 4. **A8 and A9 run other programs' installers and uninstallers.** Each runs only after a confirm, one at a time, and is logged.
+   Uninstallers must sit in trusted locations (bug sweep).
+5. **A10 writes files into Downloads as administrator.** Every file goes through `store::create_new`, so a planted link
+   cannot redirect it, and the log stops at 100 MB or on a write error.
+6. **A12 shows other apps' connections.** It is read only: addresses are not looked up, traffic is not measured and the
+   firewall is never touched, so the page makes no network use of its own.
+7. **PowerShell as administrator** (A1, A3, A10): only through `clean::powershell`, with module auto-loading off, so a
+   module planted in the user's Documents cannot run (security sweep, 2026-10-30).
 
-## Questions for the owner
-1. A2: which power mode for the charger and which for battery by default?
-2. A8: is `winget` acceptable, given it is missing on some older Windows 10 installs (the feature hides there)?
+## Questions for the owner (answered)
+1. A2 defaults: Best performance on the charger, Balanced on battery, off until switched on (2026-10-29).
+2. A8: `winget` accepted; the feature hides where it is missing (built in P2).
+
+## Still to check on the laptop (before releasing v0.9.0)
+Nothing below has run on the real, elevated, installed build yet.
+- **Data folder move:** the first start moves `%APPDATA%\com.shimmy.optimizer` to the admins-only folder; settings, history
+  and the Log come across, and unattended work starts off as designed.
+- **A3 restore point:** the Log shows a point made (or why not) on the first DISM clean-up.
+- **A5 cooling check:** stops at 95 °C or on Stop, and heat protection still acts during it.
+- **A10:** temperatures and package power appear in the sensor log and the report; `--report` from a non-elevated terminal
+  saves to Downloads.
+- **A12:** the Connections page matches `netstat -ano` and costs little while open.
+- `cargo test` (138 tests) and `cargo test --test real_scan -- --ignored`.
+- Then: version check (`Cargo.toml`, `tauri.conf.json` at 0.9.0), installer, screenshots of the Connections and System
+  pages for the README, release as `v0.9.0` with the asset named `Shimmy-Optimizer-Setup.exe`.

@@ -340,6 +340,19 @@ dialog[open] { animation: rise .25s var(--ease); }
 .sys-group .row b { font-weight: 600; }
 .sys-group .row .muted { flex: none; }
 
+/* ---------- Connections and the sensor log ---------- */
+#netList .frow .where { display: block; font-size: 14px; color: var(--muted); font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.net-conns { margin-bottom: 4px; padding: 2px 20px 12px; background: var(--s1); }
+.net-conns .row { flex-wrap: wrap; }
+.net-conns .row .muted { font-size: 14px; }
+.net-own { margin: 0; font-size: 15px; }
+#senseLog { margin-bottom: 40px; }
+.sense .cool-go { margin-top: 0; }
+.sense-pick summary { cursor: pointer; color: var(--muted); }
+.sense-pick h4 { font-size: 15px; font-weight: 600; margin: 16px 0 8px; }
+.sense-pick .ticks label { font-size: 14px; padding: 7px 10px; }
+.sense .row span { white-space: normal; }
+
 /* ---------- Programs and priority ---------- */
 #progList .frow .where { display: block; font-size: 14px; color: var(--muted); font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #progFilter { font: inherit; font-size: 15px; background: var(--s2); color: var(--ink); border: 0; padding: 7px 10px; width: 220px; }

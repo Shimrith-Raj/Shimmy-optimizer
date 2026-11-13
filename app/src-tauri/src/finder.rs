@@ -227,6 +227,11 @@ pub fn allowed(path: &Path, roots: &[PathBuf], rules: &Rules) -> Result<(), Stri
   if !md.is_file() || md.file_type().is_symlink() {
     return Err("not a regular file".into());
   }
+  // The rules below read the path's text, so it must be where the file really is: a folder swapped for a link since the
+  // scan, a `..` or an 8.3 name such as COWORK~1.ZIP would get past them.
+  if !crate::store::really_at(root, path) {
+    return Err("the path leads somewhere else".into());
+  }
   if md.file_attributes() & (HIDDEN | SYSTEM) != 0 {
     return Err("hidden or system file".into());
   }
@@ -306,5 +311,22 @@ mod tests {
     assert!(allowed(Path::new(r"C:\Windows\notepad.exe"), &roots, &Rules::default()).is_err());
     assert_eq!(allowed(&base.join("movie.mp4"), &roots, &Rules::new(500, &["MOVIE".into()])), Err("on your exclusions list".into()));
     let _ = fs::remove_dir_all(&base);
+  }
+
+  #[test]
+  fn the_gate_is_not_fooled_by_a_link_or_a_climb_out() {
+    let base = std::env::temp_dir().join(format!("shimmy-finder-link-test-{}", std::process::id()));
+    let (root, away) = (base.join("Downloads"), base.join("System"));
+    fs::create_dir_all(&root).unwrap();
+    fs::create_dir_all(&away).unwrap();
+    fs::write(root.join("movie.mp4"), "x").unwrap();
+    fs::write(away.join("victim.dll"), "x").unwrap();
+    let swapped = root.join("Setup");
+    assert!(std::process::Command::new("cmd").args(["/c", "mklink", "/J"]).arg(&swapped).arg(&away).stdout(std::process::Stdio::null()).status().unwrap().success());
+    let roots = vec![root.clone()];
+    assert!(allowed(&root.join("movie.mp4"), &roots, &Rules::default()).is_ok());
+    assert_eq!(allowed(&swapped.join("victim.dll"), &roots, &Rules::default()), Err("the path leads somewhere else".into()), "a folder swapped for a link since the scan");
+    assert_eq!(allowed(&root.join("..").join("System").join("victim.dll"), &roots, &Rules::default()), Err("the path leads somewhere else".into()), "climbing out with ..");
+    let _ = (fs::remove_dir(&swapped), fs::remove_dir_all(&base));
   }
 }

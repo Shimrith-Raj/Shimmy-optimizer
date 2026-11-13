@@ -28,8 +28,22 @@ $nt = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
 
 /// Everything the System info page shows. Takes a second or two, so the caller keeps the answer.
 pub fn read() -> Result<Value, String> {
-  let out = crate::clean::hidden("powershell.exe", &["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", SCRIPT])
+  let modules = [crate::clean::PS_BASE[0], crate::clean::PS_BASE[1], "CimCmdlets", "Storage"];
+  let out = crate::clean::powershell(&modules, SCRIPT)
     .map_err(|e| format!("Could not ask Windows: {e}"))?;
   let text = String::from_utf8_lossy(&out.stdout);
   serde_json::from_str(text.trim()).map_err(|_| "Windows' hardware inventory gave an answer Shimmy could not read.".into())
+}
+
+#[cfg(test)]
+mod tests {
+  use crate::clean::ps_script;
+
+  #[test]
+  fn no_module_is_found_by_name() {
+    let s = ps_script(&["CimCmdlets", "Storage"], "Get-PhysicalDisk");
+    assert!(s.starts_with("$PSModuleAutoLoadingPreference='None'\n"), "auto-loading goes off before anything else: {s}");
+    assert!(s.contains(r#"foreach ($m in 'CimCmdlets','Storage') { Import-Module "$PSHOME\Modules\$m" -ErrorAction Stop }"#), "{s}");
+    assert!(s.ends_with("\nGet-PhysicalDisk"));
+  }
 }
